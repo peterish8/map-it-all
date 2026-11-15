@@ -1,6 +1,7 @@
 // Import graph with real alias resolution: tsconfig/jsconfig `paths` (and `extends`), plus workspace
 // packages from package.json `workspaces`. Nothing here is specific to one repo layout.
 
+import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { globToRegExp } from './config.mjs';
 import { lineAt } from './records.mjs';
@@ -121,16 +122,43 @@ const IMPORT_RES = [
   /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
+const BUILTINS = new Set(builtinModules);
+
+/** `@scope/name/deep/path` -> `@scope/name`, `name/sub` -> `name`; null for relative, node: and builtin specifiers. */
+export function packageName(spec) {
+  if (!spec || spec[0] === '.' || spec[0] === '/' || spec.startsWith('node:') || /^[a-z]+:/i.test(spec)) return null;
+  const parts = spec.split('/');
+  const name = spec[0] === '@' ? parts.slice(0, 2).join('/') : parts[0];
+  return !name || (spec[0] !== '@' && BUILTINS.has(name)) || (spec[0] === '@' && parts.length < 2) ? null : name;
+}
+
 /** target file -> [{ path, line, names }] for every resolvable internal import. */
 export function buildImportGraph(ctx, resolver = createResolver(ctx)) {
+  return scanImports(ctx, resolver).reverse;
+}
+
+/**
+ * One pass over every code file. `reverse` is the internal import graph; `externals` maps a package
+ * name to the places that import it (`[{ path, line }]`), found in the same pass at no extra cost.
+ */
+export function scanImports(ctx, resolver = createResolver(ctx)) {
   const reverse = new Map();
+  const externals = new Map();
   for (const from of ctx.codeFiles) {
     const text = ctx.read(from);
     if (!text) continue;
     for (const re of IMPORT_RES) {
       for (const m of text.matchAll(re)) {
         const target = resolver.resolve(m[1], from);
-        if (!target || target === from) continue;
+        if (!target) {
+          const pkg = packageName(m[1]);
+          if (pkg) {
+            if (!externals.has(pkg)) externals.set(pkg, []);
+            externals.get(pkg).push({ path: from, line: lineAt(text, m.index) });
+          }
+          continue;
+        }
+        if (target === from) continue;
         const names = (m[0].match(/\{([^}]*)\}/)?.[1] ?? '').split(',')
           .map((s) => s.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0])
           .filter(Boolean);
@@ -139,7 +167,7 @@ export function buildImportGraph(ctx, resolver = createResolver(ctx)) {
       }
     }
   }
-  return reverse;
+  return { reverse, externals };
 }
 
 /** Local binding name -> import specifier for one file (default, named, namespace, require). */

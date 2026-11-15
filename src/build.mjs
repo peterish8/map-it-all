@@ -6,11 +6,11 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { loadConfig } from './config.mjs';
 import { createContext, fingerprint } from './context.mjs';
-import { buildImportGraph, createResolver } from './imports.mjs';
+import { createResolver, scanImports } from './imports.mjs';
 import { LEAD_FLAGS, loadStore } from './store.mjs';
 import { renderView } from './view.mjs';
 
-export const GENERATOR_VERSION = 2;
+export const GENERATOR_VERSION = 3;
 
 const PACKS = ['convex', 'express', 'expo'];
 const EXTRACTORS = ['tooling', 'docs', 'drift', 'debt'];
@@ -36,7 +36,7 @@ export async function buildMap({ root, out, withKnip = false, write = true, log 
   out = out ? path.resolve(out) : outDirFor(root, config);
   const ctx = createContext(root, config);
   const resolver = createResolver(ctx);
-  const graph = buildImportGraph(ctx, resolver);
+  const { reverse: graph, externals } = scanImports(ctx, resolver);
 
   const results = {};
   const errors = [];
@@ -69,6 +69,7 @@ export async function buildMap({ root, out, withKnip = false, write = true, log 
     await run(name, () => pack.extract(ctx, opts, resolver));
   }
   for (const name of EXTRACTORS) await run(name, async () => (await import(`./extractors/${name}.mjs`)).extract(ctx));
+  await run('deps', async () => (await import('./extractors/deps.mjs')).extract(ctx, externals));
   if (withKnip) await run('knip', async () => (await import('./extractors/knip.mjs')).extract(ctx, graph, resolver));
 
   const index = {};

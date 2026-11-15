@@ -40,7 +40,7 @@ test('MCP server: handshake, profiles, tools, memory round trip, errors', async 
     c.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
 
     const list = (await c.call('tools/list', {})).result.tools.map((t) => t.name);
-    assert.deepEqual(list, ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'realtime'], 'standard profile');
+    assert.deepEqual(list, ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'deps', 'memory', 'handoff', 'realtime'], 'standard profile');
     assert.match((await c.tool('realtime')).text, /realtime OFF/, 'off until you turn it on');
     assert.match((await c.tool('realtime', { action: 'on' })).text, /realtime ON.*edit hook is not installed/s, 'it tells you when nothing can trigger it');
     assert.match((await c.tool('realtime', { action: 'off' })).text, /realtime OFF/);
@@ -78,7 +78,7 @@ test('MCP server: handshake, profiles, tools, memory round trip, errors', async 
     assert.equal((await c.call('bogus/method', {})).error.code, -32601);
 
     for (const line of c.raw) JSON.parse(line); // stdout carried only protocol messages
-  } finally { c.close(); rmSync(root, { recursive: true, force: true }); }
+  } finally { c.close(); rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
 });
 
 test('MCP profiles control the tool surface', async () => {
@@ -89,5 +89,5 @@ test('MCP profiles control the tool surface', async () => {
     const tools = (await c.call('tools/list', {})).result.tools;
     assert.deepEqual(tools.map((t) => t.name), ['brief', 'find', 'connections', 'memory']);
     assert.ok(JSON.stringify(tools).length / 4 < 1000, 'minimal profile stays under about 1000 tokens');
-  } finally { c.close(); rmSync(root, { recursive: true, force: true }); }
+  } finally { c.close(); rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
 });

@@ -83,7 +83,7 @@ Add to `CLAUDE.md` / `AGENTS.md`:
 
 ## Keep the tool surface small
 
-Every connected tool is paid for on every request. `--profile minimal` exposes four tools (about 670 tokens); `standard` ten (about 1,270). Add it to the args: `"--profile", "minimal"`. Run `map-it-all tokens` to see the numbers for your install.
+Every connected tool is paid for on every request. `--profile minimal` exposes four tools (about 670 tokens); `standard` eleven (about 1,490). Add it to the args: `"--profile", "minimal"`. Run `map-it-all tokens` to see the numbers for your install.
 
 ## Troubleshooting
 

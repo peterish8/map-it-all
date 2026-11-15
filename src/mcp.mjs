@@ -12,6 +12,7 @@ import { renderBrief, readFilesList } from './brief.mjs';
 import { buildMap, diff, isFresh, outDirFor } from './build.mjs';
 import { loadConfig } from './config.mjs';
 import { PKG_ROOT, createContext } from './context.mjs';
+import { runDeps, versionOfFrom } from './deps.mjs';
 import { hookInstalled } from './init.mjs';
 import { createMemory, formatHandoff, formatNote } from './memory.mjs';
 import { lockHeld, setEnabled, status as realtimeStatus, waitForLock } from './realtime.mjs';
@@ -22,8 +23,8 @@ const MAX_TEXT = 14000;
 
 export const PROFILES = {
   minimal: ['brief', 'find', 'connections', 'memory'],
-  standard: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'realtime'],
-  full: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'realtime', 'refresh', 'view'],
+  standard: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'deps', 'memory', 'handoff', 'realtime'],
+  full: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'deps', 'memory', 'handoff', 'realtime', 'refresh', 'view'],
 };
 
 const INSTRUCTIONS = [
@@ -34,12 +35,12 @@ const INSTRUCTIONS = [
   '`symbol` is name-based; use a language-server or call-graph tool for exact call graphs.',
 ].join(' ');
 
-export function createServer({ root, profile = 'standard', outOverride } = {}) {
+export function createServer({ root, profile = 'standard', outOverride, allowOnline = false } = {}) {
   root = path.resolve(root);
   const config = loadConfig(root);
   const out = outOverride ? path.resolve(outOverride) : outDirFor(root, config);
   const memDir = config.memoryDir ? path.resolve(root, config.memoryDir) : path.join(out, 'memory');
-  const memory = createMemory({ root, dir: memDir });
+  const memory = createMemory({ root, dir: memDir, versionOf: versionOfFrom(() => (existsSync(path.join(out, 'stamp.json')) ? store() : null)) });
   let cache = null;
   let building = null;
 
@@ -103,7 +104,9 @@ export function createServer({ root, profile = 'standard', outOverride } = {}) {
         if (t.error) return t.error;
         const recs = s.byPath.get(t.path) ?? [];
         const lines = [t.path];
-        for (const r of recs.filter((x) => x.kind !== 'debt')) {
+        const deps = recs.filter((x) => x.kind === 'dependency');
+        if (deps.length) lines.push('', `declares ${deps.length} dependencies (use the deps tool for versions, advisories and who imports them)`);
+        for (const r of recs.filter((x) => x.kind !== 'debt' && x.kind !== 'dependency')) {
           lines.push('', `${r.id}  line ${r.line}  ${flagsOf(r)}  refs ${r.refCount} (production ${r.prodRefCount})`);
           for (const x of r.refs.slice(0, 8)) lines.push(`    ${x.path}:${x.line} ${x.how}`);
           if (r.refCount > 8) lines.push(`    … ${r.refCount - 8} more (use connections)`);
@@ -202,6 +205,21 @@ export function createServer({ root, profile = 'standard', outOverride } = {}) {
       description: 'What this session newly orphaned: records that lost their last production reference since the session-start snapshot, removed records, new surface nothing uses. Needs the snapshot taken at session start.',
       inputSchema: { type: 'object', properties: {} },
       async run() { await ensureFresh(); return diff(out); },
+    },
+    {
+      name: 'deps',
+      description: 'Dependencies tied to your code: which files import each package, known vulnerabilities and deprecations for the installed versions with the files they expose, possibly unused packages. package + docs saves a version-pinned docs excerpt as a memory note. Online lookups run only if the user enabled them; results are cached.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          package: { type: 'string', description: 'One direct dependency, for detail.' },
+          docs: { type: 'string', description: 'With package: what you need to know (a keyword or question) for a short docs excerpt.' },
+          only: { type: 'string', enum: ['vulnerable', 'deprecated', 'unused'] },
+          refresh: { type: 'boolean', description: 'Re-check now instead of using the cache (only if online is enabled).' },
+          limit: { type: 'integer', minimum: 1, maximum: 50, default: 15 },
+        },
+      },
+      async run(a) { await ensureFresh(); return runDeps({ root, out, store: store(), memory, config, args: a, allowOnline }); },
     },
     {
       name: 'memory',

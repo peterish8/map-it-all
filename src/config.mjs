@@ -6,6 +6,7 @@
 //     "historyDirs": [".planning", "archive"],     folders treated as history (skipped by docs, drift, debt)
 //     "ignore": ["**/vendor/**"],                  extra globs to leave out of the map
 //     "driftIgnore": ["^\\.mcp\\.json$"],          doc references (regex) the docs-drift check should not flag
+//     "network": false,                            true lets `deps` and `docs` look up advisories and docs online (cached)
 //     "packs": "auto" | ["convex", "express", "expo"],
 //     "convex": { "dir": "convex" },
 //     "express": { "appFiles": ["server/app.ts"] },
@@ -22,6 +23,7 @@ export const DEFAULTS = {
   historyDirs: ['.planning', 'audit', 'archive', 'graft', 'output', '.claude', '.agents', '.cursor'],
   ignore: [],
   driftIgnore: [],
+  network: false,
   packs: 'auto',
   convex: {},
   express: {},
