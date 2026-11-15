@@ -5,7 +5,7 @@
 // and are merged when the `deps` tool runs. See src/deps.mjs.
 
 import { createHash } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadLocks } from '../lock.mjs';
 import { escapeRe, finalize, lineAt, ref } from '../records.mjs';
@@ -49,6 +49,26 @@ export function extract(ctx, externals = new Map()) {
 
   const records = [];
   const seenLocks = new Set();
+  const dependencyFingerprint = createHash('sha256').update('map-it-all-dependencies-v1\0');
+  const fingerprintField = (kind, file, value) => {
+    const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    dependencyFingerprint.update(`${kind.length}:${kind}${file.length}:${file}${bytes.length}:`).update(bytes);
+  };
+  for (const m of manifests) {
+    try { fingerprintField('manifest', m.file, ctx.read(m.file)); } catch { fingerprintField('manifest-state', m.file, existsSync(path.join(ctx.root, m.file)) ? 'unreadable' : 'missing'); }
+    const found = locks.for(m.dir);
+    // Record every candidate governing lock path, including absent and unreadable files, so adding
+    // a nearer lockfile invalidates a previously complete summary.
+    for (let d = m.dir; ; d = d.includes('/') ? d.slice(0, d.lastIndexOf('/')) : '') {
+      for (const lockName of ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml']) {
+        const f = d ? `${d}/${lockName}` : lockName;
+        if (found?.lock.file !== f && found) continue;
+        try { fingerprintField('lock', f, readFileSync(path.join(ctx.root, f))); } catch { fingerprintField('lock-state', f, existsSync(path.join(ctx.root, f)) ? 'unreadable' : 'missing'); }
+      }
+      if (!d) break;
+      if (found && d === found.lock.dir) break;
+    }
+  }
   for (const { name, declared } of byName.values()) {
     const versions = new Set();
     const bins = new Set();
@@ -72,6 +92,8 @@ export function extract(ctx, externals = new Map()) {
       id: `dep:${name}`, kind: 'dependency', name, path: first.file, line: at === -1 ? 1 : lineAt(text, at), public: false,
       version: [...versions][0] ?? null, versions: [...versions].sort(), dev: prodDeclared.length === 0,
       declaredIn: declared.map((d) => `${d.file}#${d.section}`).slice(0, 12), bins: [...bins].slice(0, 6),
+      // Full eligible declarations drive coverage and traversal; declaredIn remains capped for display.
+      declarations: declared.map((d) => ({ file: d.file, section: d.section, range: d.range })),
       // A dependency is only a cleanup lead when it is a production dependency nothing imports,
       // runs in a script or names in a config file. Everything else is expected to have no import.
       entry: prodDeclared.length === 0 || hidden,
@@ -80,10 +102,10 @@ export function extract(ctx, externals = new Map()) {
   }
   // A cheap fingerprint of the lockfiles: the brief uses it to say "the last advisory check is out of date".
   const sig = createHash('sha1');
-  for (const f of [...seenLocks].sort()) { try { sig.update(`${f}:${statSync(path.join(ctx.root, f)).size};`); } catch { sig.update(`${f}:gone;`); } }
+  for (const f of [...seenLocks].sort()) { try { sig.update(`${f}:`).update(readFileSync(path.join(ctx.root, f))); } catch { sig.update(`${f}:gone;`); } }
   return {
     records,
-    stats: { depsDirect: records.length, depsLocks: seenLocks.size, depsLockSig: seenLocks.size ? sig.digest('hex').slice(0, 12) : null },
+    stats: { depsDirect: records.length, depsLocks: seenLocks.size, depsLockSig: seenLocks.size ? sig.digest('hex').slice(0, 12) : null, depsFingerprint: dependencyFingerprint.digest('hex') },
     notes: records.some((r) => !r.version) && !seenLocks.size ? ['no lockfile found next to package.json: dependency versions are unknown, so advisories cannot be checked'] : [],
   };
 }

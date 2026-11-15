@@ -4,11 +4,13 @@
 // or MAP_IT_ALL_ONLINE=1. An agent cannot: a tool argument only asks for a refresh, and the answer is
 // still "no" while the policy says off. MAP_IT_ALL_OFFLINE=1 wins over everything (CI, air-gapped).
 //
-// What leaves the machine: package names and versions, nothing else. No paths, no code, no repo name.
-// What comes back is untrusted text: it is size-capped, stripped of control characters, and the
-// URLs a package author controls (docs links) may only reach public https hosts.
+// OSV receives package/version queries and advisory IDs in detail URL paths. npm and docs hosts receive
+// requested URLs, our remote IP and ordinary HTTP/TLS metadata, including this tool's user-agent.
+// Responses are capped and treated as untrusted; docs destinations are restricted to public HTTPS.
 
 import { lookup } from 'node:dns/promises';
+import { request as httpsRequest } from 'node:https';
+import { request as httpRequest } from 'node:http';
 import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -31,13 +33,23 @@ function privateAddress(ip) {
   const kind = net.isIP(ip);
   if (kind === 4) {
     const [a, b] = ip.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168 || b === 0)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19 || b === 51)) || (a === 203 && b === 0);
   }
   if (kind === 6) {
     const l = ip.toLowerCase();
     if (l === '::1' || l === '::') return true;
-    if (l.startsWith('::ffff:')) return privateAddress(l.slice(7));
-    return /^f[cd]/.test(l) || /^fe[89ab]/.test(l);
+    if (l.startsWith('::ffff:')) {
+      const mapped = l.slice(7);
+      if (net.isIP(mapped) === 4) return privateAddress(mapped);
+      const parts = mapped.split(':');
+      if (parts.length === 2 && parts.every((p) => /^[\da-f]{1,4}$/i.test(p))) return privateAddress(`${parseInt(parts[0], 16) >> 8}.${parseInt(parts[0], 16) & 255}.${parseInt(parts[1], 16) >> 8}.${parseInt(parts[1], 16) & 255}`);
+      return true;
+    }
+    // Only global unicast 2000::/3 is accepted; reject protocol assignments, 6to4 and documentation ranges.
+    const [first, second] = l.split(':');
+    const firstWord = parseInt(first || '0', 16);
+    const secondWord = parseInt(second || '0', 16);
+    return firstWord < 0x2000 || firstWord >= 0x4000 || (firstWord === 0x2001 && secondWord <= 0x01ff) || l.startsWith('2001:db8:') || l.startsWith('2002:') || l.startsWith('3fff:');
   }
   return true; // not an address we understand: fail closed
 }
@@ -53,42 +65,69 @@ export async function assertPublicUrl(url) {
   return u;
 }
 
-async function readCapped(res, maxBytes) {
-  const reader = res.body.getReader();
-  const chunks = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.length;
-    chunks.push(value);
-    if (size > maxBytes) { await reader.cancel(); break; }
-  }
-  return Buffer.concat(chunks).subarray(0, maxBytes).toString('utf8');
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`request timed out after ${ms} ms`)), ms); timer.unref?.(); })]).finally(() => clearTimeout(timer));
 }
 
 /**
  * GET or POST with a timeout, a size cap and manual redirects (at most 3). `trusted` is for the fixed
- * service endpoints (OSV, npm registry, or a test server); everything else must be a public https URL.
+ * service endpoints (OSV, npm registry, or a test server). Every redirect is independently resolved;
+ * untrusted destinations require public HTTPS addresses.
  */
-export async function fetchText(url, { method = 'GET', body, headers = {}, timeoutMs = 8000, maxBytes = 1_000_000, trusted = false } = {}) {
-  let current = url;
-  for (let hop = 0; hop < 4; hop++) {
-    const sameOrigin = trusted && new URL(current).origin === new URL(url).origin;
-    const u = sameOrigin ? new URL(current) : await assertPublicUrl(current);
-    const res = await fetch(u, {
-      method: hop === 0 ? method : 'GET',
-      body: hop === 0 ? body : undefined,
-      headers: { 'user-agent': `map-it-all/${VERSION}`, ...headers },
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const next = res.headers.get('location');
-    if (res.status >= 300 && res.status < 400 && next) { current = new URL(next, u).href; continue; }
-    if (!res.ok) { const e = new Error(`${res.status} from ${u.host}`); e.status = res.status; throw e; }
-    return { text: await readCapped(res, maxBytes), type: res.headers.get('content-type') ?? '', url: u.href };
+export async function fetchText(url, { method = 'GET', body, headers = {}, timeoutMs = 8000, maxBytes = 1_000_000, trusted = false, resolve = lookup } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const timeoutError = () => new Error(`request timed out after ${timeoutMs} ms`);
+  let activeRequest;
+  const timer = setTimeout(() => activeRequest?.destroy(timeoutError()), timeoutMs);
+  const remaining = () => {
+    const budget = deadline - Date.now();
+    if (budget <= 0) throw timeoutError();
+    return budget;
+  };
+  try {
+    let current = url;
+    for (let hop = 0; hop < 4; hop++) {
+      remaining();
+      const u = new URL(current);
+      const sameOrigin = trusted && u.origin === new URL(url).origin;
+      const host = u.hostname.replace(/^\[|\]$/g, '');
+      if (!sameOrigin) {
+        if (u.protocol !== 'https:') throw new Error(`refusing non-https URL (${u.protocol}//${u.host})`);
+        if (host === 'localhost' || /\.(localhost|local|internal|lan)$/.test(host)) throw new Error(`refusing local host ${host}`);
+      }
+      const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await withTimeout(resolve(host, { all: true }), remaining());
+      remaining(); // Ignore a DNS result that arrived after the total deadline.
+      if (!addrs.length || (!sameOrigin && addrs.some((a) => privateAddress(a.address)))) throw new Error(`refusing ${host}: not a public address`);
+      const chosen = addrs[0];
+      if (u.protocol !== 'https:' && !(sameOrigin && u.protocol === 'http:')) throw new Error('refusing non-https URL');
+      const transport = u.protocol === 'https:' ? httpsRequest : httpRequest;
+      const res = await new Promise((resolve, reject) => {
+        const req = activeRequest = transport({ protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method: hop === 0 ? method : 'GET', headers: { host: u.host, 'user-agent': `map-it-all/${VERSION}`, ...headers }, timeout: remaining(),
+          // The socket connects to this resolved address while TLS verifies the original hostname.
+          lookup: (_hostname, options, callback) => options?.all ? callback(null, [chosen]) : callback(null, chosen.address, chosen.family),
+        }, (response) => {
+          const chunks = []; let size = 0;
+          response.on('data', (chunk) => { size += chunk.length; if (size > maxBytes) req.destroy(new Error(`response exceeds ${maxBytes} bytes`)); else chunks.push(chunk); });
+          response.on('end', () => resolve({ status: response.statusCode ?? 0, headers: response.headers, text: Buffer.concat(chunks).toString('utf8') }));
+          response.on('error', reject);
+        });
+        req.on('timeout', () => req.destroy(timeoutError()));
+        req.on('error', reject);
+        if (hop === 0 && body !== undefined) req.write(body);
+        req.end();
+      });
+      activeRequest = undefined;
+      remaining();
+      const next = res.headers.location;
+      if (res.status >= 300 && res.status < 400 && next) { current = new URL(next, u).href; continue; }
+      if (res.status < 200 || res.status >= 300) { const e = new Error(`${res.status} from ${u.host}`); e.status = res.status; throw e; }
+      return { text: res.text, type: res.headers['content-type'] ?? '', url: u.href };
+    }
+    throw new Error('too many redirects');
+  } finally {
+    clearTimeout(timer);
   }
-  throw new Error('too many redirects');
 }
 
 export async function getJson(url, options) {

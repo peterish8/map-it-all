@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildMap, outDirFor } from './build.mjs';
-import { loadConfig } from './config.mjs';
+import { CONFIG_FILE, loadConfig } from './config.mjs';
 import { setEnabled } from './realtime.mjs';
 import { loadStore } from './store.mjs';
 
@@ -239,6 +239,19 @@ export async function runInit(root, flags) {
 
   // 4. .gitignore
   out.push(`[4/4] .gitignore      ${config.out}/ ${ensureIgnored(root, config.out, dry)}`);
+
+  // optional: persist the network opt-in. Only this explicit flag ever writes it; plain init stays offline.
+  if (flags.online) {
+    const file = path.join(root, CONFIG_FILE);
+    let note;
+    if (dry) note = `would set "network": true in ${CONFIG_FILE}`;
+    else {
+      const json = readJson(file);
+      note = json.network === true ? 'already set' : 'set';
+      if (note === 'set') writeJson(file, { ...json, network: true });
+    }
+    out.push('', `Network              ${note} ("network": true in ${CONFIG_FILE}). deps and docs may now look up advisories and docs. OSV receives package/version queries and advisory IDs; npm/docs receive requested URLs and ordinary HTTP/TLS metadata. Undo: set it to false, or use MAP_IT_ALL_OFFLINE=1.`);
+  }
 
   // optional hooks: the brief at session start, and realtime updates after each edit
   if (flags.hook) {

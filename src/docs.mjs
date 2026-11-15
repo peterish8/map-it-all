@@ -75,7 +75,7 @@ async function tryFetch(url, maxBytes = 400_000) {
 }
 
 /** Fetch the best available docs text for a package. Returns { source, url, excerpt } or null. */
-async function fetchDocs({ homepage, repo, query }) {
+async function fetchDocs({ homepage, repo, query, fetcher = tryFetch }) {
   const gh = githubRepo(repo) ?? githubRepo(homepage);
   const origins = [];
   try {
@@ -83,14 +83,14 @@ async function fetchDocs({ homepage, repo, query }) {
     if (h.protocol === 'https:' && h.hostname !== 'github.com') origins.push(`${h.origin}/llms.txt`, new URL('llms.txt', h.href.endsWith('/') ? h.href : `${h.href}/`).href);
   } catch { /* no usable homepage */ }
   for (const url of new Set(origins)) {
-    const r = await tryFetch(url);
+    const r = await fetcher(url);
     if (r && r.text.trim() && !/<html/i.test(r.text.slice(0, 300))) {
       let excerpt = excerptLlms(r.text, query);
       // llms.txt often links to Markdown pages: pull the best one for the question, within the same site.
       const link = r.text.split('\n').map((l) => l.match(/\]\((https:[^)\s]+\.md)\)/)?.[1]).filter(Boolean)
         .find((u) => tokensOf(query).some((t) => u.toLowerCase().includes(t)));
       if (link && new URL(link).host === new URL(r.url).host) {
-        const page = await tryFetch(link);
+        const page = await fetcher(link);
         if (page) excerpt = `${excerpt}\n\n${excerptMarkdown(page.text, query, BUDGET - Math.min(excerpt.length, 600))}`;
       }
       return { source: 'llms.txt', url: r.url, excerpt };
@@ -99,7 +99,7 @@ async function fetchDocs({ homepage, repo, query }) {
   if (gh) {
     for (const file of ['README.md', 'readme.md', 'Readme.md']) {
       const url = `https://raw.githubusercontent.com/${gh.owner}/${gh.repo}/HEAD/${file}`;
-      const r = await tryFetch(url);
+      const r = await fetcher(url);
       if (r?.text.trim()) return { source: `README (${gh.owner}/${gh.repo})`, url, excerpt: excerptMarkdown(r.text, query) };
     }
   }
@@ -110,22 +110,25 @@ async function fetchDocs({ homepage, repo, query }) {
  * The docs lookup behind `deps docs=<question>`. Reads a saved note first (free, version-checked); only
  * when there is none, or it is stale, and the network policy allows it, fetches and saves a new one.
  */
-export async function docsFor({ out, memory, name, version, query = '', policy, refresh = false }) {
+export async function docsFor({ out, memory, name, version, query = '', policy, refresh = false, fetcher = tryFetch }) {
   const q = clean(query, 80);
   const title = `docs: ${name}@${version}${q ? ` - ${q}` : ''}`;
   const notes = memory.recall({ query: `docs ${name}`, tag: 'docs', limit: 12 }).filter((n) => n.tags.includes(name.toLowerCase()));
   const same = notes.find((n) => n.title.toLowerCase() === title.toLowerCase());
-  const saved = same ?? (q ? null : notes.find((n) => n.title.startsWith(`docs: ${name}@${version}`) && n.status === 'fresh'));
-  const show = (n, extra = '') => `${n.title}  [saved note ${n.id}, ${n.status}${extra}]\n(untrusted external text, excerpted. Verify against the package before relying on it.)\n\n${n.body}`;
+  const staleMatch = q ? notes.find((n) => n.status !== 'fresh' && n.title.toLowerCase().endsWith(` - ${q.toLowerCase()}`)) : null;
+  const pkgDocs = notes.filter((n) => n.title.toLowerCase().startsWith(`docs: ${name.toLowerCase()}@`));
+  // No question: the fresh note for this version wins; otherwise fall back to a stale pinned one so offline still shows something.
+  const saved = same ?? (q ? staleMatch : pkgDocs.find((n) => n.title.startsWith(`docs: ${name}@${version}`) && n.status === 'fresh') ?? pkgDocs.find((n) => n.status !== 'fresh'));
+  const show = (n, extra = '') => `${n.title}  [saved note ${n.id}, ${n.status}${extra}]\n(untrusted external text, excerpted. The source was current when fetched; compatibility with installed ${version} is unverified. Verify against the package before relying on it.)\n\n${n.body}`;
   if (saved && saved.status === 'fresh' && !refresh) return show(saved, ', no network used');
   if (!policy.allowed) return saved ? `${show(saved)}\n\nThis note is out of date for the installed version. ${policy.why}` : `No saved docs for ${name}@${version}. ${policy.why}`;
 
   const reg = await registryFor({ out, targets: [{ name, version }], online: true });
   const meta = reg.byKey.get(`${name}@${version}`);
   if (!meta) return `Could not read registry details for ${name}@${version}${reg.error ? ` (${reg.error})` : ''}.`;
-  const found = await fetchDocs({ homepage: meta.homepage, repo: meta.repo, query: q });
+  const found = await fetchDocs({ homepage: meta.homepage, repo: meta.repo, query: q, fetcher });
   if (!found?.excerpt) return `No llms.txt or GitHub README found for ${name}@${version}${meta.homepage ? ` (homepage ${meta.homepage})` : ''}.`;
-  const body = `source: ${found.url}\n${found.excerpt}`.slice(0, 1900);
+  const body = `source fetched at ${new Date().toISOString()}; compatibility with installed ${version} is unverified.\nsource: ${found.url}\n${found.excerpt}`.slice(0, 1900);
   const note = memory.remember({ title, body, kind: 'fact', tags: ['docs', name.toLowerCase()], pins: [{ pkg: name, version }] });
   return show({ ...note, body }, `, from ${found.source}, pinned to ${name}@${version}`);
 }

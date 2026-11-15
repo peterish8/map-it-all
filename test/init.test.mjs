@@ -123,3 +123,22 @@ test('uninstall --purge refuses to delete outside the project', () => {
     assert.ok(existsSync(root));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('init stays offline by default; init --online writes the network opt-in, keeps other config, and --dry-run does not', () => {
+  const root = fixture();
+  try {
+    write(root, 'map-it-all.config.json', JSON.stringify({ historyDirs: ['old'] }));
+    const plain = run(['init', '--npx', '--no-build'], root);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.equal(JSON.parse(read(root, 'map-it-all.config.json')).network, undefined, 'ordinary init never enables the network');
+
+    const dry = run(['init', '--npx', '--no-build', '--online', '--dry-run'], root);
+    assert.match(dry.stdout, /would set "network": true/);
+    assert.equal(JSON.parse(read(root, 'map-it-all.config.json')).network, undefined);
+
+    const on = run(['init', '--npx', '--no-build', '--online'], root);
+    assert.match(on.stdout, /Network\s+set/);
+    assert.deepEqual(JSON.parse(read(root, 'map-it-all.config.json')), { historyDirs: ['old'], network: true });
+    assert.match(run(['init', '--npx', '--no-build', '--online'], root).stdout, /Network\s+already set/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

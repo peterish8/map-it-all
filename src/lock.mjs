@@ -4,7 +4,7 @@
 //
 //   lock.direct(relDir, name, range) -> id | null   the installed copy a package at `relDir` gets
 //   lock.info(id)                    -> { name, version, bin: string[] }
-//   lock.depsOf(id)                  -> id[]        what that copy depends on (empty for pnpm)
+//   lock.depsOf(id)                  -> id[]        what that copy depends on
 //   lock.ids()                       -> id[]        every installed copy
 //
 // Lockfiles are read straight from disk (the file scan skips them), parsed once per build and only as
@@ -26,14 +26,14 @@ function npmLock(json) {
 
 /** Node resolution over the flat `packages` map: nearest node_modules/<name>, walking outwards. */
 function resolveKey(packages, base, name) {
-  let b = base;
+  let b = base.replace(/\/$/, '');
   for (;;) {
-    const key = b ? `${b}/node_modules/${name}` : `node_modules/${name}`;
+    const key = !b ? `node_modules/${name}` : b.endsWith('/node_modules') || b === 'node_modules' ? `${b}/${name}` : `${b}/node_modules/${name}`;
     const entry = packages[key];
     if (entry && !entry.link) return key;
     if (!b) return null;
-    const i = b.lastIndexOf('/node_modules/');
-    b = i === -1 ? '' : b.slice(0, i);
+    const parent = path.posix.dirname(b);
+    b = parent === '.' ? '' : parent;
   }
 }
 
@@ -42,6 +42,7 @@ function npmLockV2(packages) {
   const nameOf = (key) => packages[key].name ?? key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length);
   return {
     kind: 'npm',
+    supportsTraversal: true,
     ids: () => ids,
     info: (id) => ({ name: nameOf(id), version: packages[id].version ?? null, bin: asArray(packages[id].bin) }),
     direct: (relDir, name) => resolveKey(packages, relDir, name),
@@ -72,6 +73,7 @@ function npmLockV1(json) {
   };
   return {
     kind: 'npm',
+    supportsTraversal: true,
     ids: () => [...nodes.keys()],
     info: (id) => ({ name: nodes.get(id).name, version: nodes.get(id).version, bin: [] }),
     direct: (_relDir, name) => (nodes.has(name) ? name : null),
@@ -109,6 +111,7 @@ function yarnLock(text) {
   }
   return {
     kind: 'yarn',
+    supportsTraversal: true,
     ids: () => [...nodes.keys()],
     info: (id) => ({ name: nodes.get(id).name, version: nodes.get(id).version, bin: [] }),
     direct: (_relDir, name, range) => spec.get(`${name}@${range}`) ?? null,
@@ -150,6 +153,7 @@ function pnpmLock(text) {
   }
   return {
     kind: 'pnpm',
+    supportsTraversal: false,
     ids: () => [...nodes.keys()],
     info: (id) => ({ ...nodes.get(id), bin: [] }),
     direct: (relDir, name) => {

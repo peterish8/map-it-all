@@ -75,6 +75,28 @@ export function fingerprint(root) {
       hash.update(`${s.mtimeMs}:${s.size}`);
     } catch { hash.update('gone'); }
   }
+  // Lockfiles are intentionally excluded from the file map, but their contents determine installed
+  // dependency versions. Include them here so lockfile-only changes rebuild even outside Git.
+  const listed = git(root, ['ls-files', '-co', '--exclude-standard', '-z']);
+  const names = listed === null ? walk(root) : listed.split('\0').filter(Boolean).map(norm);
+  // Gitignored lockfiles still govern installed versions (the deps extractor reads them from disk), so
+  // also probe every directory at or above a package.json, ignored or not.
+  const locks = new Set(names.filter((name) => SKIP_FILES.has(path.posix.basename(name))));
+  const manifests = names.filter((name) => path.posix.basename(name) === 'package.json');
+  const dirs = new Set(['']);
+  for (const n of names) {
+    if (path.posix.basename(n) !== 'package.json') continue;
+    for (let d = path.posix.dirname(n); d !== '.' && !dirs.has(d); d = path.posix.dirname(d)) dirs.add(d);
+  }
+  for (const d of dirs) for (const l of SKIP_FILES) if (existsSync(path.join(root, d, l))) locks.add(d ? `${d}/${l}` : l);
+  for (const f of [...locks].sort()) {
+    try { hash.update(`${f}:`).update(readFileSync(path.join(root, f))); } catch { hash.update(`${f}:gone`); }
+  }
+  // Dependency ranges are build inputs even when a manifest edit preserves file size and mtime.
+  for (const f of manifests.sort()) {
+    hash.update(`manifest:${f}:`);
+    try { hash.update(readFileSync(path.join(root, f))); } catch { hash.update(existsSync(path.join(root, f)) ? '<unreadable>' : '<missing>'); }
+  }
   return { head, branch, dirty, dirtyHash: hash.digest('hex').slice(0, 16) };
 }
 

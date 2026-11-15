@@ -10,7 +10,7 @@ import { createResolver, scanImports } from './imports.mjs';
 import { LEAD_FLAGS, loadStore } from './store.mjs';
 import { renderView } from './view.mjs';
 
-export const GENERATOR_VERSION = 3;
+export const GENERATOR_VERSION = 4;
 
 const PACKS = ['convex', 'express', 'expo'];
 const EXTRACTORS = ['tooling', 'docs', 'drift', 'debt'];

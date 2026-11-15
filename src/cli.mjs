@@ -36,7 +36,7 @@ const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'ut
 
 const COMMANDS = [
   ['demo', '[--open]', 'try it in 10 seconds on a bundled sample project (nothing in your repo is touched)'],
-  ['init', '[--agent claude|cursor|vscode|codex|all] [--npx] [--hook] [--dry-run]', 'set the project up: build the map, write the MCP config, add the block to CLAUDE.md and AGENTS.md'],
+  ['init', '[--agent claude|cursor|vscode|codex|all] [--npx] [--hook] [--online] [--dry-run]', 'set the project up: build the map, write the MCP config, add the block to CLAUDE.md and AGENTS.md (--online also allows dependency lookups permanently)'],
   ['uninstall', '[--purge]', 'undo init: remove the instruction blocks, MCP entries and hooks (--purge also deletes the local map and memory)'],
   ['realtime', '[on|off|status]', 'keep the map fresh while an agent edits (needs the hooks from `init --hook`); switch it any time'],
   ['touch', '(hook; reads Claude Code JSON on stdin)', 'after an agent edit: refresh the map in the background and warn about the edited file'],
