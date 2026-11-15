@@ -1,0 +1,53 @@
+name: Bug report
+description: Something is wrong, missing, or misleading in the map, the brief, or the MCP server
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A wrong or missing result in the map is the most useful kind of bug: please include the smallest project that shows it.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you run or ask, and what did you get?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest reproduction
+      description: A few files (or a fixture-style snippet) that shows it. For a missed caller, show the line that references the thing.
+      render: shell
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Convex pack, Express pack, Expo pack, Imports and aliases, Docs drift, Memory or handoff, MCP server, Brief, Viewer, CLI, Other]
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Agent / MCP client
+      placeholder: Claude Code 2.x, Cursor, VS Code, Codex, none (CLI)
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `map-it-all doctor`
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: map-it-all version
+      placeholder: output of `map-it-all --version`
+    validations:
+      required: true

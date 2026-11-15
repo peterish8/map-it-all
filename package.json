@@ -1,0 +1,54 @@
+{
+  "name": "map-it-all",
+  "version": "0.1.0",
+  "description": "One local map of your codebase for AI coding agents: connections, blast radius, cleanup leads, file-anchored memory and a session brief, served over MCP.",
+  "type": "module",
+  "license": "MIT",
+  "author": "peterish8",
+  "homepage": "https://github.com/peterish8/map-it-all#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peterish8/map-it-all.git"
+  },
+  "bugs": {
+    "url": "https://github.com/peterish8/map-it-all/issues"
+  },
+  "bin": {
+    "map-it-all": "bin/map-it-all.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "examples",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "demo": "node bin/map-it-all.mjs demo --open"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude-code",
+    "cursor",
+    "codex",
+    "ai-agents",
+    "coding-agents",
+    "code-graph",
+    "code-map",
+    "agent-memory",
+    "dead-code",
+    "blast-radius",
+    "ast-grep"
+  ],
+  "dependencies": {
+    "@ast-grep/cli": "^0.51.2"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "map-it-all": {
+      "command": "node",
+      "args": ["/absolute/path/to/MAP-IT-ALL/bin/map-it-all.mjs", "mcp", "--root", "/absolute/path/to/your/project"]
+    }
+  }
+}

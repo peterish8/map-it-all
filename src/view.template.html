@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAP-IT-ALL code map</title>
+<style>
+  :root {
+    --cv-bg: #0e1117; --cv-panel: #151a23; --cv-line: #283042; --cv-text: #e7eaf0; --cv-mute: #8d97a8;
+    --cv-accent: #6ea8fe; --cv-red: #ef4444; --cv-orange: #f59e0b; --cv-yellow: #d6c453; --cv-cyan: #38bdf8; --cv-green: #4ade80;
+    --cv-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; --cv-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not(.embed) { --cv-bg: #f4f5f8; --cv-panel: #ffffff; --cv-line: #d9dde6; --cv-text: #1a1f29; --cv-mute: #5b6577; --cv-accent: #2457d6; --cv-red: #d92d20; --cv-orange: #c77700; --cv-yellow: #8f7f10; --cv-cyan: #0b84b8; }
+  }
+  :root.embed { --cv-bg: transparent; --cv-panel: var(--card, #151a23); --cv-line: var(--border, #283042); --cv-text: var(--foreground, #e7eaf0); --cv-mute: var(--muted-foreground, #8d97a8); --cv-font: var(--font-sans, ui-sans-serif, system-ui, sans-serif); --cv-mono: var(--font-mono, ui-monospace, monospace); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font: 13px/1.4 var(--cv-font); color: var(--cv-text); }
+  html:not(.embed) body { background: var(--cv-bg); }
+  .app { position: relative; height: 720px; min-height: 420px; overflow: hidden; }
+  .embed .app { border: 1px solid var(--cv-line); border-radius: var(--radius, 10px); }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  canvas.drag { cursor: grabbing; }
+  .bar { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; pointer-events: none; }
+  .bar > * { pointer-events: auto; }
+  .pill { background: color-mix(in srgb, var(--cv-panel) 92%, transparent); border: 1px solid var(--cv-line); border-radius: 8px; padding: 5px 9px; backdrop-filter: blur(6px); }
+  .title { font-weight: 600; }
+  .title small { font-weight: 400; color: var(--cv-mute); margin-left: 6px; }
+  input[type=search] { background: transparent; color: var(--cv-text); border: 0; outline: 0; width: 200px; font: inherit; }
+  select, button { font: inherit; color: var(--cv-text); background: transparent; border: 0; cursor: pointer; }
+  label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; color: var(--cv-mute); }
+  button:hover, select:hover { color: var(--cv-accent); }
+  select option { background: var(--cv-panel); color: var(--cv-text); }
+  .foot { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 3px; color: var(--cv-mute); font-size: 12px; pointer-events: none; }
+  .foot > div { align-self: flex-start; background: color-mix(in srgb, var(--cv-panel) 92%, transparent); border: 1px solid var(--cv-line); border-radius: 8px; padding: 4px 9px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .tip { position: absolute; pointer-events: none; padding: 5px 8px; border-radius: 6px; background: var(--cv-panel); border: 1px solid var(--cv-line); font-size: 12px; max-width: 360px; display: none; z-index: 5; }
+  .tip b { font-family: var(--cv-mono); font-weight: 500; word-break: break-all; }
+  .panel { position: absolute; top: 96px; right: 8px; bottom: 84px; width: min(360px, calc(100% - 16px)); overflow: auto; background: color-mix(in srgb, var(--cv-panel) 96%, transparent); border: 1px solid var(--cv-line); border-radius: 10px; padding: 12px; display: none; z-index: 4; }
+  .panel h2 { font: 600 13px var(--cv-mono); margin: 0 0 4px; word-break: break-all; }
+  .panel h3 { font: 600 12px var(--cv-font); margin: 14px 0 6px; color: var(--cv-mute); text-transform: uppercase; letter-spacing: .04em; }
+  .panel .x { position: absolute; top: 6px; right: 8px; font-size: 16px; color: var(--cv-mute); }
+  .sub { color: var(--cv-mute); font-size: 12px; }
+  .card { border: 1px solid var(--cv-line); border-radius: 8px; padding: 8px; margin: 6px 0; }
+  .card .id { font: 12px var(--cv-mono); word-break: break-all; }
+  .chip { display: inline-block; padding: 0 6px; border-radius: 99px; font-size: 11px; margin: 3px 4px 0 0; border: 1px solid var(--cv-line); }
+  .t3 { color: var(--cv-red); border-color: var(--cv-red); } .t2 { color: var(--cv-orange); border-color: var(--cv-orange); } .t1 { color: var(--cv-yellow); border-color: var(--cv-yellow); } .pub { color: var(--cv-cyan); border-color: var(--cv-cyan); }
+  .link { display: block; width: 100%; text-align: left; padding: 2px 0; font: 12px var(--cv-mono); color: var(--cv-accent); word-break: break-all; }
+  .link span { color: var(--cv-mute); }
+  details summary { cursor: pointer; color: var(--cv-mute); font-size: 12px; margin-top: 4px; }
+  @media (max-width: 640px) { input[type=search] { width: 120px; } }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <canvas id="cv"></canvas>
+  <div class="bar">
+    <div class="pill title"><span id="repo">code map</span><small id="stamp"></small></div>
+    <div class="pill"><input id="q" type="search" placeholder="Search file or record  ( / )" autocomplete="off"><span class="sub" id="qn"></span></div>
+    <div class="pill"><select id="mode" title="Colour by"><option value="status">Colour: leads</option><option value="area">Colour: area</option><option value="debt">Colour: debt</option></select></div>
+    <div class="pill"><label><input id="hist" type="checkbox"> history &amp; agent files</label></div>
+    <div class="pill"><button id="reset">Reset view</button></div>
+  </div>
+  <div class="foot"><div class="legend" id="legend"></div><div>scroll zoom · drag pan · click select · double-click folder to zoom · Esc clear</div></div>
+  <div class="tip" id="tip"></div>
+  <div class="panel" id="panel"></div>
+</div>
+<script id="d" type="text/plain">__DATA_B64__</script>
+<script>
+(() => {
+'use strict';
+const root = document.documentElement;
+if (__EMBED__) root.classList.add('embed');
+const DATA = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(document.getElementById('d').textContent.trim()), (c) => c.charCodeAt(0))));
+const $ = (id) => document.getElementById(id);
+const cv = $('cv'), g = cv.getContext('2d'), tip = $('tip'), panel = $('panel');
+let W = 3200;
+const H = 1800, HEADER = 20, PAD = 4;
+const HIDDEN_AREAS = new RegExp(`^(${DATA.hidden.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') || '$^'})(/|$)`);
+
+// ---------- severity ----------
+const T3 = new Set(['no-refs', 'unmounted', 'not-in-ExpoModulesPackageList', 'target-missing', 'no-kotlin-module']);
+const T2 = new Set(['test-only', 'outside-runner-globs', 'read-not-set-in-checkout', 'history-only-refs', 'knip-unused-file', 'dead-path']);
+const T1 = new Set(['internal-only', 'same-file-only', 'conditional-mount', 'undocumented', 'never-written-here']);
+const tierOf = (flags) => (flags.some((f) => T3.has(f)) ? 3 : flags.some((f) => T2.has(f)) ? 2 : flags.some((f) => T1.has(f) || f.startsWith('knip-')) ? 1 : 0);
+const css = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+
+// ---------- indexes ----------
+const recs = new Map(), importers = new Map(), imports = new Map();
+for (const r of DATA.records) { if (!recs.has(r.path)) recs.set(r.path, []); recs.get(r.path).push(r); }
+for (const [target, list] of Object.entries(DATA.imports)) {
+  importers.set(target, list);
+  for (const entry of list) {
+    const from = entry.slice(0, entry.lastIndexOf(':'));
+    if (!imports.has(from)) imports.set(from, []);
+    imports.get(from).push(`${target}:1`);
+  }
+}
+const fileSet = new Set(DATA.files.map((f) => f[0]));
+
+// ---------- tree ----------
+let tree, leaves = new Map(), dirs = [];
+const areaOf = (p) => { const s = p.split('/'); return s[0] === 'apps' ? `apps/${s[1]}` : s[0]; };
+const HUES = { 'apps/web': 210, 'apps/api': 150, 'apps/mobile': 275, 'apps/desktop': 28, convex: 335, packages: 178, tests: 58, docs: 105, scripts: 45, tools: 45 };
+const hueOf = (p) => { const a = areaOf(p); if (a in HUES) return HUES[a]; let h = 0; for (const c of a) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+
+function build() {
+  const showHist = $('hist').checked;
+  const top = { name: '', path: '', isDir: true, kids: new Map(), size: 0 };
+  leaves = new Map(); dirs = [];
+  for (const [p, size] of DATA.files) {
+    if (!showHist && HIDDEN_AREAS.test(p)) continue;
+    const parts = p.split('/');
+    let n = top;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const key = parts[i];
+      if (!n.kids.has(key)) n.kids.set(key, { name: key, path: parts.slice(0, i + 1).join('/'), isDir: true, kids: new Map(), size: 0 });
+      n = n.kids.get(key);
+    }
+    const rs = recs.get(p) || [];
+    const flags = rs.flatMap((r) => r.flags);
+    const leaf = { name: parts[parts.length - 1], path: p, isDir: false, size: Math.max(size, 300), tier: tierOf(flags), pub: rs.some((r) => r.pub && tierOf(r.flags) > 0), debt: (rs.find((r) => r.kind === 'debt') || {}).total || 0, hue: hueOf(p) };
+    n.kids.set(parts[parts.length - 1], leaf);
+    leaves.set(p, leaf);
+  }
+  const finish = (n) => {
+    n.kids = [...n.kids.values()];
+    for (const c of n.kids) if (c.isDir) finish(c);
+    while (n.path !== '' && n.kids.length === 1 && n.kids[0].isDir) { const c = n.kids[0]; n.name += `/${c.name}`; n.path = c.path; n.kids = c.kids; }
+    n.size = 0; n.lead = 0; n.warn = 0; n.files = 0;
+    for (const c of n.kids) {
+      n.size += c.size; n.files += c.isDir ? c.files : 1;
+      n.lead += c.isDir ? c.lead : (c.tier === 3 ? 1 : 0); n.warn += c.isDir ? c.warn : (c.tier === 2 ? 1 : 0);
+    }
+    n.kids.sort((a, b) => b.size - a.size);
+    n.hue = n.kids[0] ? n.kids[0].hue : 0; dirs.push(n);
+  };
+  finish(top);
+  layout(top, 0, 0, W, H);
+  tree = top;
+}
+
+function layout(n, x, y, w, h) {
+  n.x = x; n.y = y; n.w = w; n.h = h;
+  if (!n.isDir) return;
+  const hdr = n.path === '' ? 0 : HEADER, pad = n.path === '' ? 0 : PAD;
+  const ix = x + pad, iy = y + hdr, iw = w - pad * 2, ih = h - hdr - pad;
+  if (iw <= 2 || ih <= 2 || !n.kids.length) { for (const c of n.kids) layout(c, ix, iy, 0, 0); return; }
+  const scale = (iw * ih) / n.size;
+  const items = n.kids.map((c) => ({ c, a: c.size * scale }));
+  let rx = ix, ry = iy, rw = iw, rh = ih, row = [];
+  const worst = (r, side) => { const s = r.reduce((t, i) => t + i.a, 0), mx = Math.max(...r.map((i) => i.a)), mn = Math.min(...r.map((i) => i.a)); return Math.max((side * side * mx) / (s * s), (s * s) / (side * side * mn)); };
+  const place = () => {
+    const s = row.reduce((t, i) => t + i.a, 0);
+    if (rw >= rh) { const sw = s / rh; let cy = ry; for (const i of row) { const ch = i.a / sw; layout(i.c, rx, cy, sw, ch); cy += ch; } rx += sw; rw -= sw; }
+    else { const sh = s / rw; let cx = rx; for (const i of row) { const cw2 = i.a / sh; layout(i.c, cx, ry, cw2, sh); cx += cw2; } ry += sh; rh -= sh; }
+    row = [];
+  };
+  for (const it of items) {
+    const side = Math.min(rw, rh);
+    if (!row.length || worst([...row, it], side) <= worst(row, side)) row.push(it); else { place(); row.push(it); }
+  }
+  if (row.length) place();
+}
+
+// ---------- view ----------
+let cw = 0, ch = 0, T = { k: 1, x: 0, y: 0 }, selected = null, hovered = null, matches = null;
+function resize() {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cw = r.width; ch = r.height; cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+  // Lay the treemap out in the viewport's own aspect ratio so no space is wasted.
+  const nW = Math.round(H * Math.min(3, Math.max(0.6, cw / Math.max(ch, 1))));
+  if (tree && Math.abs(nW - W) > 40) { W = nW; layout(tree, 0, 0, W, H); fit(); }
+  draw();
+}
+function fit() { const k = Math.min(cw / W, ch / H) * 0.98; T = { k, x: (cw - W * k) / 2, y: (ch - H * k) / 2 }; }
+let anim = 0;
+function flyTo(n, pad = 0.82) {
+  const k = Math.min(cw / Math.max(n.w, 1), ch / Math.max(n.h, 1)) * pad;
+  const to = { k: Math.min(k, 400), x: cw / 2 - (n.x + n.w / 2) * Math.min(k, 400), y: ch / 2 - (n.y + n.h / 2) * Math.min(k, 400) };
+  cancelAnimationFrame(anim);
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { T = to; draw(); return; }
+  const from = { ...T }, t0 = performance.now();
+  const step = (t) => {
+    const p = Math.min(1, (t - t0) / 380), e = 1 - Math.pow(1 - p, 3);
+    T = { k: from.k * Math.pow(to.k / from.k, e), x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e };
+    draw(); if (p < 1) anim = requestAnimationFrame(step);
+  };
+  anim = requestAnimationFrame(step);
+}
+
+function leafColor(n, mode) {
+  if (mode === 'area') return `hsl(${n.hue} 42% 44%)`;
+  if (mode === 'debt') { if (!n.debt) return css('--cv-line'); const t = Math.min(1, n.debt / 14); return `hsl(${50 - 50 * t} 80% ${52 - 8 * t}%)`; }
+  return n.tier === 3 ? css('--cv-red') : n.tier === 2 ? css('--cv-orange') : n.tier === 1 ? css('--cv-yellow') : `hsl(${n.hue} 18% 36%)`;
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1, mode = $('mode').value;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, cw, ch);
+  const text = css('--cv-text'), mute = css('--cv-mute'), line = css('--cv-line');
+  g.textBaseline = 'middle';
+  const k = T.k;
+  const walk = (n) => {
+    const sx = n.x * k + T.x, sy = n.y * k + T.y, sw = n.w * k, sh = n.h * k;
+    if (sx > cw || sy > ch || sx + sw < 0 || sy + sh < 0 || sw < 1.2 || sh < 1.2) return;
+    if (!n.isDir) {
+      const dim = matches && !matches.has(n.path);
+      g.globalAlpha = dim ? 0.18 : 1;
+      g.fillStyle = leafColor(n, mode); g.fillRect(sx, sy, Math.max(sw - 0.6, 0.6), Math.max(sh - 0.6, 0.6));
+      if (n.pub && sw > 5) { g.strokeStyle = css('--cv-cyan'); g.lineWidth = 1.5; g.strokeRect(sx + 0.75, sy + 0.75, sw - 1.5, sh - 1.5); }
+      if (sw > 64 && sh > 14) { g.fillStyle = '#fff'; g.font = `${Math.min(12, sh * 0.5)}px ${css('--cv-font')}`; g.save(); g.beginPath(); g.rect(sx, sy, sw, sh); g.clip(); g.fillText(n.name, sx + 4, sy + Math.min(10, sh / 2)); g.restore(); }
+      g.globalAlpha = 1; return;
+    }
+    if (n.path !== '') {
+      g.fillStyle = `hsl(${n.hue} 30% 40% / ${0.1 + 0.02 * (n.path.split('/').length % 4)})`; g.fillRect(sx, sy, sw, sh);
+      g.strokeStyle = line; g.lineWidth = 1; g.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1);
+      if (sw > 46 && HEADER * k > 9) {
+        g.fillStyle = text; g.font = `600 ${Math.min(13, HEADER * k * 0.62)}px ${css('--cv-font')}`;
+        const tag = sw > 150 && (n.lead || n.warn) ? `  ${n.lead ? `${n.lead} leads` : ''}${n.lead && n.warn ? ' · ' : ''}${n.warn ? `${n.warn} to verify` : ''}` : '';
+        g.save(); g.beginPath(); g.rect(sx, sy, sw, HEADER * k); g.clip(); g.fillText(n.name, sx + 5, sy + HEADER * k / 2);
+        if (tag) { const tw = g.measureText(n.name).width; g.fillStyle = n.lead ? css('--cv-red') : css('--cv-orange'); g.font = `${Math.min(12, HEADER * k * 0.58)}px ${css('--cv-font')}`; g.fillText(tag, sx + 8 + tw, sy + HEADER * k / 2); }
+        g.restore();
+      }
+    }
+    // Big folder names stay readable even when zoomed far out.
+    // One big label per region: the deepest folder that is still large, so parent and child never overprint.
+    const childBig = n.kids.some((c) => c.isDir && c.w * k > 110 && c.h * k > 44);
+    if (n.path !== '' && n.path.split('/').length <= 4 && HEADER * k <= 9 && sw > 110 && sh > 44 && !childBig) overlays.push([n, sx, sy, sw, sh]);
+    for (const c of n.kids) walk(c);
+  };
+  const overlays = [];
+  walk(tree);
+  g.textAlign = 'center'; g.lineJoin = 'round';
+  for (const [n, sx, sy, sw, sh] of overlays) {
+    const size = Math.max(11, Math.min(30, sw / 9)); g.font = `700 ${size}px ${css('--cv-font')}`;
+    g.lineWidth = 4; g.strokeStyle = 'rgba(0,0,0,.65)'; g.fillStyle = '#fff'; g.globalAlpha = 0.9;
+    const label = n.name.length > sw / (size * 0.6) ? n.name.slice(-Math.floor(sw / (size * 0.6))) : n.name;
+    g.strokeText(label, sx + sw / 2, sy + sh / 2); g.fillText(label, sx + sw / 2, sy + sh / 2);
+    if (n.lead || n.warn) { g.font = `600 ${Math.max(10, size * 0.5)}px ${css('--cv-font')}`; const t = `${n.lead ? `${n.lead} leads` : ''}${n.lead && n.warn ? ' · ' : ''}${n.warn ? `${n.warn} to verify` : ''}`; g.strokeText(t, sx + sw / 2, sy + sh / 2 + size * 0.95); g.fillText(t, sx + sw / 2, sy + sh / 2 + size * 0.95); }
+  }
+  g.globalAlpha = 1; g.textAlign = 'left';
+  if (selected) outline(selected, css('--cv-accent'), 2.5);
+  if (hovered && hovered !== selected) outline(hovered, text, 1.2);
+  if (selected && !selected.isDir) edges(selected);
+}
+function outline(n, color, w) { g.strokeStyle = color; g.lineWidth = w; g.strokeRect(n.x * T.k + T.x, n.y * T.k + T.y, n.w * T.k, n.h * T.k); }
+
+function centerOf(p) { const l = leaves.get(p); return l ? [(l.x + l.w / 2) * T.k + T.x, (l.y + l.h / 2) * T.k + T.y] : null; }
+function edges(sel) {
+  const [sx, sy] = centerOf(sel.path);
+  const groups = [
+    [(importers.get(sel.path) || []).map((e) => e.slice(0, e.lastIndexOf(':'))), css('--cv-accent')],
+    [(imports.get(sel.path) || []).map((e) => e.slice(0, e.lastIndexOf(':'))), css('--cv-green')],
+    [(recs.get(sel.path) || []).flatMap((r) => r.refs.map((x) => x[0])), css('--cv-orange')],
+  ];
+  g.lineWidth = 1.4;
+  for (const [list, color] of groups) {
+    g.strokeStyle = color; g.fillStyle = color; g.globalAlpha = 0.85;
+    for (const p of new Set(list)) {
+      const c = centerOf(p); if (!c || p === sel.path) continue;
+      const mx = (sx + c[0]) / 2 + (c[1] - sy) * 0.12, my = (sy + c[1]) / 2 - (c[0] - sx) * 0.12;
+      g.beginPath(); g.moveTo(sx, sy); g.quadraticCurveTo(mx, my, c[0], c[1]); g.stroke();
+      g.beginPath(); g.arc(c[0], c[1], 3, 0, 6.3); g.fill();
+    }
+  }
+  g.globalAlpha = 1;
+}
+
+// ---------- hit test ----------
+function hit(mx, my) {
+  const lx = (mx - T.x) / T.k, ly = (my - T.y) / T.k;
+  let n = tree;
+  for (;;) {
+    const next = n.isDir && n.kids.find((c) => lx >= c.x && lx <= c.x + c.w && ly >= c.y && ly <= c.y + c.h && c.w > 0);
+    if (!next) return n === tree ? null : n;
+    n = next;
+  }
+}
+
+// ---------- panel ----------
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+function goTo(path) {
+  let n = leaves.get(path);
+  if (!n && fileSet.has(path) && !$('hist').checked) { $('hist').checked = true; build(); n = leaves.get(path); }
+  if (!n) return; select(n); flyTo(n, 0.35);
+}
+function linkRow(label, path, note) {
+  const b = el('button', 'link', label); b.append(Object.assign(el('span', '', note ? `  ${note}` : '')));
+  b.onclick = () => goTo(path); return b;
+}
+function chips(flags, pub) {
+  const wrap = el('div');
+  for (const f of flags) wrap.append(el('span', `chip t${tierOf([f])}`, f));
+  if (pub) wrap.append(el('span', 'chip pub', 'public: VERIFY, not REMOVE'));
+  return wrap;
+}
+function list(title, items, make, cap = 30) {
+  if (!items.length) return;
+  panel.append(el('h3', '', `${title} (${items.length})`));
+  const box = el('div'); items.slice(0, cap).forEach((i) => box.append(make(i)));
+  if (items.length > cap) { const m = el('button', 'link', `+ ${items.length - cap} more`); m.onclick = () => { m.remove(); items.slice(cap).forEach((i) => box.append(make(i))); }; box.append(m); }
+  panel.append(box);
+}
+function select(n) {
+  selected = n; panel.replaceChildren();
+  const close = el('button', 'x', '×'); close.onclick = () => { selected = null; panel.style.display = 'none'; draw(); }; panel.append(close);
+  panel.style.display = 'block';
+  panel.append(el('h2', '', n.path || '/'));
+  if (n.isDir) {
+    panel.append(el('div', 'sub', `${n.files} files · ${(n.size / 1024).toFixed(0)} KB · ${n.lead} leads · ${n.warn} to verify`));
+    const files = []; (function collect(d) { for (const c of d.kids) c.isDir ? collect(c) : files.push(c); })(n);
+    list('Flagged files', files.filter((f) => f.tier > 0).sort((a, b) => b.tier - a.tier || a.path.localeCompare(b.path)), (f) => linkRow(f.path, f.path, `tier ${f.tier}`), 40);
+    const btn = el('button', 'link', 'Zoom to this folder'); btn.onclick = () => flyTo(n); panel.append(btn);
+  } else {
+    panel.append(el('div', 'sub', `${(n.size / 1024).toFixed(1)} KB`));
+    const rs = (recs.get(n.path) || []).filter((r) => r.kind !== 'debt');
+    const debt = (recs.get(n.path) || []).find((r) => r.kind === 'debt');
+    if (debt) panel.append(el('div', 'sub', `debt markers: ${Object.entries(debt.flags).map(([, f]) => f.replace('has-', '')).join(', ')} (${debt.total})`));
+    if (rs.length) panel.append(el('h3', '', `Map records (${rs.length})`));
+    for (const r of rs.slice(0, 40)) {
+      const card = el('div', 'card'); card.append(el('div', 'id', `${r.id}  :${r.line}`)); card.append(chips(r.flags, r.pub));
+      card.append(el('div', 'sub', `${r.rc} refs (${r.pr} production)`));
+      if (r.refs.length) { const d = el('details'); d.append(el('summary', '', 'show refs')); r.refs.forEach((x) => d.append(linkRow(`${x[0]}:${x[1]}`, x[0], x[2]))); card.append(d); }
+      panel.append(card);
+    }
+    list('Imported by', (importers.get(n.path) || []).map((e) => e.slice(0, e.lastIndexOf(':'))), (p) => linkRow(p, p));
+    list('Imports', (imports.get(n.path) || []).map((e) => e.slice(0, e.lastIndexOf(':'))), (p) => linkRow(p, p));
+    panel.append(el('div', 'sub', 'Lines on the map: blue = imported by, green = imports, orange = callers of its records.'));
+  }
+  draw();
+}
+
+// ---------- events ----------
+let drag = null;
+cv.addEventListener('pointerdown', (e) => { try { cv.setPointerCapture(e.pointerId); } catch { /* synthetic or ended pointer */ } drag = { x: e.clientX, y: e.clientY, tx: T.x, ty: T.y, moved: false }; cv.classList.add('drag'); });
+cv.addEventListener('pointermove', (e) => {
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  if (drag) { const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true; T.x = drag.tx + dx; T.y = drag.ty + dy; draw(); return; }
+  const n = hit(mx, my); if (n !== hovered) { hovered = n; draw(); }
+  if (!n) { tip.style.display = 'none'; return; }
+  const rs = n.isDir ? [] : (recs.get(n.path) || []).filter((x) => x.flags.length && x.kind !== 'debt');
+  tip.replaceChildren(el('b', '', n.path || '/'), el('div', 'sub', n.isDir ? `${n.files} files · ${n.lead} leads · ${n.warn} to verify` : `${(n.size / 1024).toFixed(1)} KB${rs.length ? ` · ${rs.map((x) => x.id).slice(0, 3).join(', ')}` : ''}`));
+  tip.style.display = 'block'; tip.style.left = `${Math.min(mx + 14, cw - 260)}px`; tip.style.top = `${Math.min(my + 14, ch - 60)}px`;
+});
+cv.addEventListener('pointerup', (e) => {
+  cv.classList.remove('drag');
+  if (drag && !drag.moved) { const r = cv.getBoundingClientRect(); const n = hit(e.clientX - r.left, e.clientY - r.top); if (n) select(n); else { selected = null; panel.style.display = 'none'; draw(); } }
+  drag = null;
+});
+cv.addEventListener('pointerleave', () => { tip.style.display = 'none'; if (hovered) { hovered = null; draw(); } });
+cv.addEventListener('dblclick', (e) => { const r = cv.getBoundingClientRect(); const n = hit(e.clientX - r.left, e.clientY - r.top); if (n) flyTo(n, 0.9); });
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault(); cancelAnimationFrame(anim);
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const f = Math.pow(1.0016, -e.deltaY), k = Math.min(500, Math.max(0.05, T.k * f)), real = k / T.k;
+  T.x = mx - (mx - T.x) * real; T.y = my - (my - T.y) * real; T.k = k; draw();
+}, { passive: false });
+window.addEventListener('keydown', (e) => {
+  if (e.key === '/' && document.activeElement !== $('q')) { e.preventDefault(); $('q').focus(); }
+  if (e.key === 'Escape') { $('q').value = ''; $('q').blur(); matches = null; $('qn').textContent = ''; selected = null; panel.style.display = 'none'; draw(); }
+});
+$('q').addEventListener('input', () => {
+  const q = $('q').value.trim().toLowerCase();
+  if (!q) { matches = null; $('qn').textContent = ''; draw(); return; }
+  matches = new Set();
+  for (const p of fileSet) if (p.toLowerCase().includes(q)) matches.add(p);
+  for (const r of DATA.records) if (r.id.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)) matches.add(r.path);
+  $('qn').textContent = ` ${matches.size}`; draw();
+});
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && matches && matches.size) goTo([...matches].find((p) => leaves.has(p)) || [...matches][0]); });
+$('mode').addEventListener('change', () => { legend(); draw(); });
+$('hist').addEventListener('change', () => { selected = null; panel.style.display = 'none'; build(); fit(); draw(); });
+$('reset').addEventListener('click', () => { fit(); draw(); });
+// Full-page mode: the app fills the window. Embedded mode keeps its fixed 720px frame.
+const fillWindow = () => { if (!root.classList.contains('embed')) $('app').style.height = `${window.innerHeight}px`; };
+window.addEventListener('resize', fillWindow); fillWindow();
+new ResizeObserver(() => { resize(); }).observe(cv);
+
+function legend() {
+  const mode = $('mode').value, box = $('legend'); box.replaceChildren();
+  const add = (color, label) => { const s = el('span'); const i = el('i'); i.style.background = color; s.append(i, label); box.append(s); };
+  if (mode === 'status') { add(css('--cv-red'), 'no refs / unmounted / unregistered'); add(css('--cv-orange'), 'test-only / outside runner / VERIFY'); add(css('--cv-yellow'), 'explained: internal-only, conditional…'); add(css('--cv-cyan'), 'cyan outline = public surface'); }
+  else if (mode === 'debt') { add('hsl(50 80% 52%)', 'few markers'); add('hsl(0 80% 44%)', 'many markers (any, ts-ignore, console.log…)'); }
+  else add(`hsl(210 42% 44%)`, 'colour = area (web, api, mobile, convex, packages…)');
+}
+
+$('repo').textContent = DATA.stamp.repo || 'code map';
+$('stamp').textContent = `  ${DATA.stamp.head.slice(0, 8)} · ${DATA.stamp.branch || 'detached'} · ${DATA.files.length} files · ${DATA.records.length} records`;
+build(); legend(); resize(); fit(); draw();
+})();
+</script>
+</body>
+</html>

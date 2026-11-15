@@ -1,0 +1,4 @@
+node_modules/
+.map-it-all/
+*.log
+.DS_Store

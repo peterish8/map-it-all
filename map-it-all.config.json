@@ -1,0 +1,17 @@
+{
+  "ignore": ["examples/demo-app/**"],
+  "driftIgnore": [
+    "^\\.mcp\\.json$",
+    "^\\.cursor/",
+    "^\\.vscode/",
+    "^\\.claude/",
+    "^\\.map-it-all/",
+    "^server/",
+    "^convex/",
+    "^~/",
+    "^CLAUDE\\.md$",
+    "^ExpoModulesPackageList\\.kt$",
+    "^schema\\.ts$",
+    "^db\\.ts$"
+  ]
+}

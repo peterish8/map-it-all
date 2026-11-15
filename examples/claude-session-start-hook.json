@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/MAP-IT-ALL/bin/map-it-all.mjs session-start --root /absolute/path/to/your/project",
+            "timeout": 120000
+          }
+        ]
+      }
+    ]
+  }
+}

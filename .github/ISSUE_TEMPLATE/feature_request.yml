@@ -1,0 +1,30 @@
+name: Feature or framework request
+description: Suggest a tool, a check, or support for a framework
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What goes wrong for you or your agent today? Concrete beats general.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: If it is a new framework, name it and show how routes, functions or modules are registered in a real project.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [New framework pack, New check or flag, New or changed MCP tool, CLI, Docs, Other]
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Fit
+      options:
+        - label: It can work locally with no network access
+        - label: It does not need many more MCP tools (tool definitions cost tokens on every request)

@@ -1,0 +1,10 @@
+{
+  "out": ".map-it-all",
+  "memoryDir": null,
+  "historyDirs": [".planning", "archive", "docs/old"],
+  "ignore": ["**/vendor/**", "**/generated/**"],
+  "packs": "auto",
+  "convex": { "dir": "convex" },
+  "express": { "appFiles": ["server/app.ts"] },
+  "expo": { "dir": "apps/mobile" }
+}
