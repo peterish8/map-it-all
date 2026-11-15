@@ -1,7 +1,7 @@
 // Markdown files with inbound links, so "archive only when nothing links in" is a lookup.
 
 import path from 'node:path';
-import { escapeRe, finalize, ref } from '../records.mjs';
+import { escapeRe, finalize, pathTokens, ref } from '../records.mjs';
 
 // Read by tools and readers without a link: agent entry files, repo health files, GitHub templates.
 const ENTRY = (f) => /(^|\/)(README|CLAUDE|AGENTS|GEMINI|SKILL|CHANGELOG|LICENSE|CONTRIBUTING|CODE_OF_CONDUCT|SECURITY|CREDITS)(\.[\w-]+)?\.md$/i.test(f)
@@ -15,7 +15,7 @@ export function extract(ctx) {
   // basename -> [{ file, token }] for every `...name.md` token in any text file.
   const mentions = new Map();
   for (const f of ctx.textFiles) {
-    for (const m of new Set(ctx.read(f).match(/[\w@./-]*[\w-]+\.md\b/g) ?? [])) {
+    for (const m of pathTokens(ctx.read(f), /[\w-]\.md$/)) {
       const base = path.posix.basename(m);
       if (!mentions.has(base)) mentions.set(base, []);
       mentions.get(base).push({ file: f, token: m });

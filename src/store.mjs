@@ -1,7 +1,7 @@
 // Read side of the map: loads .map-it-all/ into indexes and answers connection questions.
 // Used by the MCP server and the CLI; no I/O beyond reading the JSON the builder wrote.
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { isTestPath } from './context.mjs';
 
@@ -13,7 +13,27 @@ export const LEAD_FLAGS = new Set([
   'outside-runner-globs', 'history-only-refs', 'read-not-set-in-checkout', 'knip-unused-file', 'dead-path',
 ]);
 
+const stampTime = (out) => { try { return statSync(path.join(out, 'stamp.json')).mtimeMs; } catch { return 0; } };
+
+/**
+ * Load the map. A background build may replace files while we read, so check that the stamp did not
+ * change underneath us and retry (briefly) if it did. Returns null when there is no map yet.
+ */
 export function loadStore(out) {
+  for (let attempt = 0; ; attempt++) {
+    const before = stampTime(out);
+    try {
+      const store = loadOnce(out);
+      if (stampTime(out) === before) return store;
+    } catch (error) {
+      if (attempt >= 3) throw error;
+    }
+    if (attempt >= 3) return loadOnce(out);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
+  }
+}
+
+function loadOnce(out) {
   if (!existsSync(path.join(out, 'stamp.json')) || !existsSync(path.join(out, 'imports.json'))) return null;
   const stamp = JSON.parse(readFileSync(path.join(out, 'stamp.json'), 'utf8'));
   const records = [];

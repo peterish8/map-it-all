@@ -12,7 +12,9 @@ import { renderBrief, readFilesList } from './brief.mjs';
 import { buildMap, diff, isFresh, outDirFor } from './build.mjs';
 import { loadConfig } from './config.mjs';
 import { PKG_ROOT, createContext } from './context.mjs';
+import { hookInstalled } from './init.mjs';
 import { createMemory, formatHandoff, formatNote } from './memory.mjs';
+import { lockHeld, setEnabled, status as realtimeStatus, waitForLock } from './realtime.mjs';
 import { findRecords, flagsOf, formatConnections, loadStore, mermaid, resolveTarget, LEAD_FLAGS } from './store.mjs';
 
 const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version;
@@ -20,8 +22,8 @@ const MAX_TEXT = 14000;
 
 export const PROFILES = {
   minimal: ['brief', 'find', 'connections', 'memory'],
-  standard: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff'],
-  full: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'refresh', 'view'],
+  standard: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'realtime'],
+  full: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'realtime', 'refresh', 'view'],
 };
 
 const INSTRUCTIONS = [
@@ -42,6 +44,8 @@ export function createServer({ root, profile = 'standard', outOverride } = {}) {
   let building = null;
 
   async function ensureFresh({ force = false, withKnip = false } = {}) {
+    // A realtime worker may be rebuilding right now: wait for it instead of racing it.
+    if (lockHeld(out)) await waitForLock(out);
     if (!force && isFresh(root, out)) return false;
     building ??= buildMap({ root, out, withKnip }).finally(() => { building = null; });
     await building;
@@ -240,6 +244,17 @@ export function createServer({ root, profile = 'standard', outOverride } = {}) {
       async run(a) {
         if (a.action === 'save') { const h = memory.saveHandoff(a); return `handoff saved (${h.nextSteps.length} next step(s), ${h.files.length} file(s) tracked)`; }
         return formatHandoff(memory.readHandoff());
+      },
+    },
+    {
+      name: 'realtime',
+      description: 'Switch realtime updates on or off, or check them. On: after each file edit a hook refreshes the map in the background (one rebuild per burst of edits) and adds a short warning when the edited file has public records, many importers, or code that just lost its last reference. Turn it off for bulk or generated changes; it costs nothing while off.',
+      inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['on', 'off', 'status'], default: 'status' } } },
+      async run(a) {
+        const action = a.action ?? 'status';
+        if (action === 'on' || action === 'off') setEnabled(out, action === 'on');
+        const s = realtimeStatus(out);
+        return `realtime ${s.enabled ? 'ON' : 'OFF'}${s.rebuilding ? ' (rebuilding now)' : ''}${s.enabled && !hookInstalled(root) ? '. The edit hook is not installed in this project, so nothing triggers it yet: run `map-it-all init --hook`.' : ''}`;
       },
     },
     {

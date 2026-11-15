@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -54,15 +54,16 @@ test('file, connections, leads and symbol work from the terminal and match the M
 test('init --npx prints an npx entry; without it, a path to this clone; --write merges and keeps other servers', () => {
   const root = fixture();
   try {
-    const npx = run(['init', '--agent', 'claude', '--npx', '--root', root]).stdout;
-    assert.match(npx, /github:peterish8\/map-it-all/);
-    assert.match(npx, process.platform === 'win32' ? /"cmd"/ : /"npx"/);
-    const local = run(['init', '--agent', 'cursor', '--root', root]).stdout;
-    assert.match(local, /map-it-all\.mjs/);
-    const wrote = run(['init', '--agent', 'vscode', '--write', '--root', root]);
-    assert.match(wrote.stdout, /wrote \.vscode[\\/]mcp\.json/);
+    const dry = run(['init', '--agent', 'claude', '--npx', '--dry-run', '--root', root]).stdout;
+    assert.match(dry, /dry run/);
+    assert.equal(existsSync(path.join(root, '.mcp.json')), false, 'a dry run writes nothing');
+    run(['init', '--agent', 'claude', '--npx', '--root', root]);
+    const claude = JSON.parse(readFileSync(path.join(root, '.mcp.json'), 'utf8')).mcpServers['map-it-all'];
+    assert.match(JSON.stringify(claude), /github:peterish8\/map-it-all/);
+    assert.equal(claude.command, process.platform === 'win32' ? 'cmd' : 'npx');
+    run(['init', '--agent', 'vscode', '--root', root]);
     const json = JSON.parse(readFileSync(path.join(root, '.vscode', 'mcp.json'), 'utf8'));
-    assert.ok(json.servers['map-it-all']);
+    assert.match(JSON.stringify(json.servers['map-it-all']), /map-it-all\.mjs/, 'without --npx the entry points at this clone');
     assert.match(readFileSync(path.join(root, '.gitignore'), 'utf8'), /\.map-it-all\//);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

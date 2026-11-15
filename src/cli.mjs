@@ -1,22 +1,22 @@
 // map-it-all command line. One tool, one map; the MCP server and the CLI share the same code.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { renderBrief, readFilesList } from './brief.mjs';
 import { buildMap, check, diff, isFresh, outDirFor, snapshot } from './build.mjs';
 import { loadConfig } from './config.mjs';
 import { PKG_ROOT } from './context.mjs';
 import { doctor } from './doctor.mjs';
+import { hookInstalled, runInit, runUninstall } from './init.mjs';
 import { createMemory, formatHandoff, formatNote } from './memory.mjs';
 import { PROFILES, createServer, serveStdio } from './mcp.mjs';
+import { runWorker, setEnabled, status as realtimeStatus } from './realtime.mjs';
 import { findRecords, loadStore } from './store.mjs';
 import { renderView } from './view.mjs';
 
-const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'map-it-all.mjs').replaceAll('\\', '/');
-const VALUE_FLAGS = ['root', 'out', 'kind', 'flag', 'limit', 'agent', 'profile', 'direction', 'depth'];
+const VALUE_FLAGS = ['root', 'out', 'kind', 'flag', 'limit', 'agent', 'profile', 'direction', 'depth', 'docs'];
 
 function parse(argv) {
   const opts = { _: [], flags: {} };
@@ -31,12 +31,14 @@ function parse(argv) {
   return opts;
 }
 
-export const REPO_SPEC = 'github:peterish8/map-it-all';
 const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version;
 
 const COMMANDS = [
   ['demo', '[--open]', 'try it in 10 seconds on a bundled sample project (nothing in your repo is touched)'],
-  ['init', '[--agent claude|cursor|vscode|codex|all] [--npx] [--write]', 'print (or write) the MCP config and the session-start hook'],
+  ['init', '[--agent claude|cursor|vscode|codex|all] [--npx] [--hook] [--dry-run]', 'set the project up: build the map, write the MCP config, add the block to CLAUDE.md and AGENTS.md'],
+  ['uninstall', '[--purge]', 'undo init: remove the instruction blocks, MCP entries and hooks (--purge also deletes the local map and memory)'],
+  ['realtime', '[on|off|status]', 'keep the map fresh while an agent edits (needs the hooks from `init --hook`); switch it any time'],
+  ['touch', '(hook; reads Claude Code JSON on stdin)', 'after an agent edit: refresh the map in the background and warn about the edited file'],
   ['doctor', '', 'check Node, git, ast-grep, Knip, RTK and the map'],
   ['build', '[--with-knip]', 'build the map (a few seconds)'],
   ['view', '[--open] [--embed]', 'build and print the path of the zoomable map page'],
@@ -62,7 +64,7 @@ const HELP = `map-it-all ${VERSION}: one local map of your codebase for AI codin
 usage: map-it-all <command> [options]
 
 commands:
-${COMMANDS.map(([name, args, desc]) => `  ${`${name} ${args}`.trim().padEnd(58)}${desc}`).join('\n')}
+${COMMANDS.map(([name, args, desc]) => `  ${`${name} ${args}`.trim().padEnd(76)}${desc}`).join('\n')}
 
 options:
   --root <dir>    project to map (default: $MAP_IT_ALL_ROOT, then the current directory)
@@ -79,67 +81,6 @@ function commandHelp(name) {
 
 async function ensure(root, out) {
   if (!isFresh(root, out)) await buildMap({ root, out });
-}
-
-/**
- * The MCP server entry. Default points at this clone (`node <clone>/bin/...`). With --npx it uses
- * `npx -y github:...` so nothing has to be cloned; on native Windows npx must be run through cmd.
- */
-function mcpEntry(root, profile, npx) {
-  const tail = ['mcp', ...(npx ? [] : ['--root', root.replaceAll('\\', '/')]), ...(profile ? ['--profile', profile] : [])];
-  if (!npx) return { command: 'node', args: [BIN, ...tail] };
-  const args = ['-y', REPO_SPEC, ...tail];
-  return process.platform === 'win32' ? { command: 'cmd', args: ['/c', 'npx', ...args] } : { command: 'npx', args };
-}
-
-function mergeJson(file, key, name, entry) {
-  let json = {};
-  if (existsSync(file)) { try { json = JSON.parse(readFileSync(file, 'utf8')); } catch { throw new Error(`${file} is not valid JSON; fix it or add the server by hand`); } }
-  json[key] = { ...json[key], [name]: entry };
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
-}
-
-function init(root, flags) {
-  const config = loadConfig(root);
-  const agent = flags.agent === true || !flags.agent ? 'claude' : flags.agent;
-  const npx = Boolean(flags.npx);
-  const entry = mcpEntry(root, flags.profile && flags.profile !== true ? flags.profile : undefined, npx);
-  const out = [];
-  const targets = {
-    claude: { file: path.join(root, '.mcp.json'), key: 'mcpServers' },
-    cursor: { file: path.join(root, '.cursor', 'mcp.json'), key: 'mcpServers' },
-    vscode: { file: path.join(root, '.vscode', 'mcp.json'), key: 'servers' },
-  };
-  for (const name of agent === 'all' ? ['claude', 'cursor', 'vscode', 'codex'] : [agent]) {
-    if (name === 'codex') {
-      out.push('Codex (~/.codex/config.toml):', '', '[mcp_servers.map-it-all]', `command = ${JSON.stringify(entry.command)}`, `args = ${JSON.stringify(entry.args)}`, '');
-      continue;
-    }
-    const t = targets[name];
-    if (!t) { out.push(`unknown agent "${name}" (use claude, cursor, vscode, codex or all)`); continue; }
-    if (flags.write) { mergeJson(t.file, t.key, 'map-it-all', entry); out.push(`wrote ${path.relative(root, t.file)}`); }
-    else out.push(`${name} (${path.relative(root, t.file)}):`, JSON.stringify({ [t.key]: { 'map-it-all': entry } }, null, 2), '');
-  }
-  const gi = path.join(root, '.gitignore');
-  const ignored = existsSync(gi) && readFileSync(gi, 'utf8').split('\n').some((l) => l.trim().replace(/^\//, '').startsWith(config.out));
-  if (!ignored) {
-    if (flags.write) { writeFileSync(gi, `${existsSync(gi) ? `${readFileSync(gi, 'utf8').replace(/\n*$/, '\n')}` : ''}${config.out}/\n`); out.push(`added ${config.out}/ to .gitignore`); }
-    else out.push(`add ${config.out}/ to .gitignore (map, memory and handoff are local), or run init --write`);
-  }
-  out.push(
-    '',
-    'Claude Code SessionStart hook (.claude/settings.json), so every session starts with the brief:',
-    JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: npx ? `npx -y ${REPO_SPEC} session-start` : `node ${BIN} session-start --root ${root.replaceAll('\\', '/')}`, timeout: 120000 }] }] } }, null, 2),
-    '',
-    'CLAUDE.md / AGENTS.md lines worth adding:',
-    '  - Start each session with the map-it-all `brief` tool. Before editing or deleting, use `connections` and `find`.',
-    '  - Zero refs is a lead, never proof. `public` records may be used by installed clients: VERIFY, do not remove.',
-    '  - Save durable learnings with the `memory` tool, anchored to files; call `handoff` before ending.',
-    '',
-    'Optional: pair with RTK to cut shell-output tokens (`map-it-all doctor` shows how).',
-  );
-  return out.join('\n');
 }
 
 function tokens(root, out, config) {
@@ -191,7 +132,18 @@ export async function main(argv) {
       }
       break;
     }
-    case 'init': console.log(init(root, flags)); break;
+    case 'init': console.log(await runInit(root, flags)); break;
+    case 'uninstall': console.log(await runUninstall(root, flags)); break;
+    case 'realtime': {
+      const action = rest[0] ?? 'status';
+      if (action !== 'on' && action !== 'off' && action !== 'status') { console.error(commandHelp('realtime')); process.exit(2); }
+      if (action !== 'status') setEnabled(out, action === 'on');
+      const s = realtimeStatus(out);
+      console.log(`realtime: ${s.enabled ? 'ON' : 'OFF'}${s.rebuilding ? '  (a background rebuild is running)' : ''}`);
+      if (s.enabled && !hookInstalled(root)) console.log('note: the edit hook is not installed in this project, so nothing triggers it yet. Run: map-it-all init --hook');
+      break;
+    }
+    case 'rebuild-worker': await runWorker({ root, out, debounceMs: Number(process.env.MAP_IT_ALL_DEBOUNCE_MS) || 1500 }); break;
     case 'doctor': { const r = doctor(root); console.log(r.text); if (!r.ok) process.exit(1); break; }
     case 'build': {
       log(`map-it-all: ${root}`);

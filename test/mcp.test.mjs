@@ -40,7 +40,10 @@ test('MCP server: handshake, profiles, tools, memory round trip, errors', async 
     c.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
 
     const list = (await c.call('tools/list', {})).result.tools.map((t) => t.name);
-    assert.deepEqual(list, ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff'], 'standard profile');
+    assert.deepEqual(list, ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'realtime'], 'standard profile');
+    assert.match((await c.tool('realtime')).text, /realtime OFF/, 'off until you turn it on');
+    assert.match((await c.tool('realtime', { action: 'on' })).text, /realtime ON.*edit hook is not installed/s, 'it tells you when nothing can trigger it');
+    assert.match((await c.tool('realtime', { action: 'off' })).text, /realtime OFF/);
 
     const brief = (await c.tool('brief')).text;
     assert.match(brief, /Session brief/);

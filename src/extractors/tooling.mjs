@@ -3,7 +3,7 @@
 
 import path from 'node:path';
 import { globToRegExp } from '../config.mjs';
-import { escapeRe, finalize, ref } from '../records.mjs';
+import { escapeRe, finalize, lineAt, pathTokens, ref } from '../records.mjs';
 
 const LIFECYCLE = /^(test|start|build|dev|lint|prepare|install|ci|(pre|post).+)$/;
 const PLATFORM_ENV = /^(NODE_ENV|CI|PORT|HOME|USERPROFILE|PATH|APPDATA|TEMP|TMPDIR|LANG|PWD|SHELL|VERCEL(_.*)?|GITHUB_.*|RUNNER_.*|NEXT_RUNTIME|ANDROID_.*|JAVA_HOME|EXPO_OS)$/;
@@ -19,7 +19,7 @@ function scriptFiles(ctx) {
   const wanted = ctx.files.filter((f) => isScript(f) && /\.(mjs|cjs|js|ts|sh|ps1|py)$/.test(f));
   const mentions = new Map();
   for (const f of ctx.textFiles) {
-    for (const m of new Set(ctx.read(f).match(/[\w@./-]*[\w-]+\.(?:mjs|cjs|js|ts|sh|ps1|py)\b/g) ?? [])) {
+    for (const m of pathTokens(ctx.read(f), /[\w-]\.(?:mjs|cjs|js|ts|sh|ps1|py)$/)) {
       const base = path.posix.basename(m);
       if (!mentions.has(base)) mentions.set(base, new Set());
       mentions.get(base).add(f);
@@ -47,19 +47,29 @@ function packageFiles(ctx) {
 function npmScripts(ctx) {
   const haystack = ctx.textFiles.filter((f) => !ctx.isHistory(f) && !f.endsWith('package-lock.json')
     && (/\.(md|ya?ml|json|mjs|cjs|sh|ps1)$/.test(f)));
+  // One pass over the haystack: which script names does each file invoke? Then a lookup per script,
+  // instead of a regex per script per file.
+  const calls = new Map(); // name -> [{ f, line }]
+  const CALL = /(?:\brun(?:-script)?\s+(?:-\S+\s+)*|\bnpm(?:\.cmd)?\s+|\b(?:pnpm|yarn|bun)\s+)([\w:.-]+)/g;
+  for (const f of haystack) {
+    const text = ctx.read(f);
+    if (!/\b(?:run|npm|pnpm|yarn|bun)\b/.test(text)) continue;
+    const seen = new Set();
+    for (const m of text.matchAll(CALL)) {
+      const name = m[1].replace(/\.+$/, '');
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (!calls.has(name)) calls.set(name, []);
+      calls.get(name).push({ f, line: lineAt(text, m.index) });
+    }
+  }
   const out = [];
   for (const pkgPath of packageFiles(ctx)) {
     let scripts;
     try { scripts = JSON.parse(ctx.read(pkgPath)).scripts ?? {}; } catch { continue; }
     for (const name of Object.keys(scripts)) {
       const esc = escapeRe(name);
-      const call = new RegExp(`(?:\\brun(?:-script)?\\s+(?:-\\S+\\s+)*|\\bnpm(?:\\.cmd)?\\s+|\\b(?:pnpm|yarn|bun)\\s+)${esc}(?![\\w:-])`);
-      const refs = [];
-      for (const f of haystack) {
-        const text = ctx.read(f);
-        const m = text.match(call);
-        if (m) refs.push(ref(f, text.slice(0, m.index).split('\n').length, 'run'));
-      }
+      const refs = (calls.get(name) ?? []).map(({ f, line }) => ref(f, line, 'run'));
       out.push(finalize({
         id: `npm-script:${pkgPath}#${name}`, kind: 'npm-script', name, path: pkgPath,
         line: ctx.firstLine(pkgPath, esc), public: false, entry: LIFECYCLE.test(name), refs, flags: [],

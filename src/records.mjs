@@ -9,6 +9,22 @@ export const norm = (p) => p.replaceAll('\\', '/');
 
 export const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\:]/g, '\\$&');
 
+const TOKEN = /[\w@./-]+/g;
+
+/**
+ * Path-like tokens in `text` whose tail matches `tailRe` (e.g. /[\w-]\.md$/). Linear time: one pass
+ * to split on non-path characters, then a cheap anchored test per token. The obvious one-regex
+ * version (`[\w@./-]*[\w-]+\.md\b`) backtracks quadratically on long tokens and was half the build.
+ */
+export function pathTokens(text, tailRe) {
+  const out = new Set();
+  for (const m of text.matchAll(TOKEN)) {
+    const t = m[0].replace(/[.\-/]+$/, '');
+    if (t.length > 2 && tailRe.test(t)) out.add(t);
+  }
+  return out;
+}
+
 export function lineAt(text, index) {
   let line = 1;
   for (let i = text.indexOf('\n'); i !== -1 && i < index; i = text.indexOf('\n', i + 1)) line++;

@@ -1,7 +1,7 @@
 // Build the map: run the detected packs and generic extractors, write .map-it-all/, and provide the
 // freshness check, session snapshot and diff.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { loadConfig } from './config.mjs';
@@ -16,6 +16,12 @@ const PACKS = ['convex', 'express', 'expo'];
 const EXTRACTORS = ['tooling', 'docs', 'drift', 'debt'];
 
 export const outDirFor = (root, config = loadConfig(root)) => path.resolve(root, config.out);
+
+function atomicWrite(file, data) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, file);
+}
 
 function jsonRecords(header, records) {
   const head = Object.entries(header).map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(',');
@@ -88,17 +94,19 @@ export async function buildMap({ root, out, withKnip = false, write = true, log 
 
   if (write) {
     mkdirSync(out, { recursive: true });
+    // Each file is replaced atomically (write temp, rename), so a reader never sees half a file. The
+    // stamp goes last: it is the marker readers compare before and after loading.
     for (const [name, r] of Object.entries(results)) {
       if (r.extra) {
-        writeFileSync(path.join(out, r.extra.file), `${JSON.stringify({ kind: r.extra.kind, head: stamp.head, count: Object.keys(r.extra.index).length, index: r.extra.index })}\n`);
+        atomicWrite(path.join(out, r.extra.file), `${JSON.stringify({ kind: r.extra.kind, head: stamp.head, count: Object.keys(r.extra.index).length, index: r.extra.index })}\n`);
       } else {
-        writeFileSync(path.join(out, `${name}.json`), jsonRecords({ extractor: name, head: stamp.head, count: r.records.length }, r.records));
+        atomicWrite(path.join(out, `${name}.json`), jsonRecords({ extractor: name, head: stamp.head, count: r.records.length }, r.records));
       }
     }
-    writeFileSync(path.join(out, 'files.json'), `${JSON.stringify({ files: ctx.files })}\n`);
-    writeFileSync(path.join(out, 'stamp.json'), `${JSON.stringify(stamp, null, 2)}\n`);
-    writeFileSync(path.join(out, 'INDEX.md'), renderIndex(stamp, results));
-    writeFileSync(path.join(out, 'graph.html'), renderView({ root, stamp, results, files: ctx.files, hidden: config.historyDirs }));
+    atomicWrite(path.join(out, 'files.json'), `${JSON.stringify({ files: ctx.files })}\n`);
+    atomicWrite(path.join(out, 'INDEX.md'), renderIndex(stamp, results));
+    atomicWrite(path.join(out, 'graph.html'), renderView({ root, stamp, results, files: ctx.files, hidden: config.historyDirs }));
+    atomicWrite(path.join(out, 'stamp.json'), `${JSON.stringify(stamp, null, 2)}\n`);
   }
   ctx.dispose();
   return { stamp, results, files: ctx.files, root, out };

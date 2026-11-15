@@ -36,17 +36,29 @@ function walk(root, dir = '', out = []) {
   return out;
 }
 
-/** Tracked plus untracked-not-ignored files that exist on disk (git), or a directory walk outside git. */
-export function listFiles(root, ignore = []) {
+/**
+ * Tracked plus untracked-not-ignored files that exist on disk (git), or a directory walk outside git.
+ * One stat per file gives both "does it exist" and its size, so reads never stat again.
+ */
+export function scanFiles(root, ignore = []) {
   const listed = git(root, ['ls-files', '-co', '--exclude-standard', '-z']);
   const names = listed === null ? walk(root) : listed.split('\0').filter(Boolean).map(norm);
   const extra = ignore.map(globToRegExp);
-  return [...new Set(names)]
-    .filter((f) => !f.split('/').some((seg) => SKIP_DIRS.has(seg)) && !SKIP_FILES.has(path.posix.basename(f)))
-    .filter((f) => !extra.some((re) => re.test(f)))
-    .filter((f) => existsSync(path.join(root, f)))
-    .sort();
+  const sizes = new Map();
+  const files = [];
+  for (const f of new Set(names)) {
+    if (f.split('/').some((seg) => SKIP_DIRS.has(seg)) || SKIP_FILES.has(path.posix.basename(f)) || extra.some((re) => re.test(f))) continue;
+    try {
+      const s = statSync(path.join(root, f));
+      if (!s.isFile()) continue;
+      sizes.set(f, s.size);
+      files.push(f);
+    } catch { /* deleted in the working tree but still listed */ }
+  }
+  return { files: files.sort(), sizes };
 }
+
+export const listFiles = (root, ignore = []) => scanFiles(root, ignore).files;
 
 /** HEAD, branch and a hash of the working-tree state. Two equal fingerprints mean an equal map. */
 export function fingerprint(root) {
@@ -95,7 +107,7 @@ function launcherFor(bin) {
 
 export function createContext(root, config = loadConfig(root)) {
   root = path.resolve(root);
-  const files = listFiles(root, config.ignore);
+  const { files, sizes } = scanFiles(root, config.ignore);
   const fileSet = new Set(files);
   const cache = new Map();
   const history = config.historyDirs.map((d) => d.replace(/\/+$/, ''));
@@ -119,7 +131,7 @@ export function createContext(root, config = loadConfig(root)) {
       if (!cache.has(f)) {
         let text = '';
         try {
-          if (statSync(path.join(root, f)).size <= MAX_BYTES) text = readFileSync(path.join(root, f), 'utf8');
+          if ((sizes.get(f) ?? 0) <= MAX_BYTES) text = readFileSync(path.join(root, f), 'utf8');
         } catch { /* unreadable counts as empty */ }
         cache.set(f, text);
       }
