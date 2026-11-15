@@ -67,14 +67,21 @@ npx -y github:peterish8/map-it-all demo --open
 
 That maps a bundled sample project into your temp folder and opens the zoomable map.
 
-**2. Connect it to your agent:**
+**2. Connect it to your agent** (from your project folder):
 
 ```bash
-cd /path/to/your/project
+# macOS / Linux / WSL / Git Bash
 claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp
 ```
 
-Not on Claude Code, or on native Windows? See [Connect your agent](#connect-your-agent).
+```powershell
+# Windows PowerShell: quote the double dash, and run npx through cmd
+claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp
+```
+
+> PowerShell swallows an unquoted `--`, and Claude Code then fails with `error: unknown option '-y'`. If you would rather not think about quoting in any shell, let the tool write the config: `npx -y github:peterish8/map-it-all init --agent claude --npx --write` (Claude Code asks you to approve a project-level server the first time).
+
+Not on Claude Code? See [Connect your agent](#connect-your-agent).
 
 **3. Ask your agent to call `brief`.** That is the whole setup. The first call builds the map (a few seconds); after that it rebuilds only when your tree changes.
 
@@ -102,11 +109,14 @@ node /path/to/map-it-all/bin/map-it-all.mjs view --open  # the zoomable map
 <summary><b>Claude Code</b></summary>
 
 ```bash
-# macOS / Linux / WSL, from your project folder
+# macOS / Linux / WSL / Git Bash, from your project folder
 claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp
 
-# native Windows: npx has to run through cmd
-claude mcp add map-it-all -- cmd /c npx -y github:peterish8/map-it-all mcp
+# Windows PowerShell: npx runs through cmd, and the double dash must be quoted
+claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp
+
+# any shell, no `--` to get wrong: the tool writes .mcp.json for you
+npx -y github:peterish8/map-it-all init --agent claude --npx --write
 ```
 
 Start every session with the brief by adding a `SessionStart` hook to `.claude/settings.json`:

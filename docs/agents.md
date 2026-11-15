@@ -3,9 +3,14 @@
 ## Without cloning (npx)
 
 ```bash
-claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp           # macOS / Linux / WSL
-claude mcp add map-it-all -- cmd /c npx -y github:peterish8/map-it-all mcp    # native Windows
+claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp           # macOS / Linux / WSL / Git Bash
 ```
+
+```powershell
+claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp  # Windows PowerShell
+```
+
+**PowerShell note:** PowerShell swallows an unquoted `--` before `claude` sees it, so `claude mcp add map-it-all -- npx -y …` fails with `error: unknown option '-y'`. Quote it as `'--'` (tested), or avoid it entirely with `npx -y github:peterish8/map-it-all init --agent claude --npx --write`, which writes `.mcp.json` in your project. Claude Code asks you to approve a project-level server the first time it starts. Native Windows also needs `cmd /c` in front of `npx`.
 
 `map-it-all init --npx` prints (or with `--write` merges) the same thing for Claude Code, Cursor, VS Code and Codex, with `cmd /c` added on Windows. The server maps the directory the client starts it in; pass `--root <dir>` or set `MAP_IT_ALL_ROOT` to point elsewhere. The config blocks below use a local clone instead (`node <MAP>/bin/map-it-all.mjs`), which is faster to start and works offline.
 

@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Docs: the Claude Code one-liner failed in Windows PowerShell with `unknown option '-y'` because PowerShell swallows an unquoted `--`. The README and `docs/agents.md` now show the PowerShell form (`'--'`) and a shell-independent alternative (`init --agent claude --npx --write`).
+
 ## [0.1.0] - 2026-11-15
 
 First public release.
