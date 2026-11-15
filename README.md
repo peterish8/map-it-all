@@ -39,7 +39,7 @@ Solo developers working with coding agents keep hitting the same walls:
 | Agents add code instead of changing it, break parts they cannot see, lose the plot in a large repo | [Columbia DAPLab's 9 failure patterns of coding agents](https://daplab.cs.columbia.edu/general/2026/01/08/9-critical-failure-patterns-of-coding-agents.html) (repeated code, codebase awareness, refactoring) | `connections` shows the blast radius before the edit; `find` and `symbol` find the helper that already exists |
 | Every new session re-explains the project and burns input tokens | A constant complaint in developer threads; context files drift out of date | `brief` at session start, `handoff` at session end |
 | Memory goes stale as the code changes | [STALE: can LLM agents know when their memories are outdated?](https://arxiv.org/abs/2605.06527), [Dosu on pruning stale agent memory](https://dosu.dev/articles/prune-stale-agent-memory) | Notes carry file hashes; `recall` flags `stale` and `orphaned` notes |
-| Too many MCP tools cost tokens on every request and make tool choice worse | [MCP tool overload](https://dev.to/thedailyagent/mcp-tool-overload-why-more-tools-make-your-agent-worse-5a49) reports ~42,000 tokens of definitions for GitHub's official server | 4 to 11 tools in three profiles: **~670 / ~1,150 / ~1,270 tokens** (measured, `map-it-all tokens`) |
+| Too many MCP tools cost tokens on every request and make tool choice worse | [MCP tool overload](https://dev.to/thedailyagent/mcp-tool-overload-why-more-tools-make-your-agent-worse-5a49) reports ~42,000 tokens of definitions for GitHub's official server | 4 to 12 tools in three profiles: **~670 / ~1,270 / ~1,400 tokens** (measured, `map-it-all tokens`) |
 | Dead code piles up, docs describe deleted files | [Developers report](https://news.ycombinator.com/item?id=48770319) that agents add and rarely delete | `leads`, `diff`, and a docs-drift check |
 | Shell output floods the context | [RTK](https://github.com/rtk-ai/rtk) | `doctor` detects it and prints the setup ([docs/rtk.md](docs/rtk.md)) |
 
@@ -67,23 +67,47 @@ npx -y github:peterish8/map-it-all demo --open
 
 That maps a bundled sample project into your temp folder and opens the zoomable map.
 
-**2. Connect it to your agent** (from your project folder):
+**2. Set it up in your project, with one command** (run it from your project folder):
 
 ```bash
-# macOS / Linux / WSL / Git Bash
-claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp
+npx -y github:peterish8/map-it-all init --npx
 ```
 
+That works in bash, zsh and PowerShell alike, and it does everything:
+
+```text
+[1/4] Map             built in 0.6 s: 46 files, packs: convex, express, expo
+                      connections: 16 import edges across 14 imported files; most imported: web/src/lib/api.ts (x3)
+                      19 public records (verify, never remove), 15 cleanup leads
+[2/4] MCP config      claude: added in .mcp.json
+[3/4] Instructions    CLAUDE.md: appended; AGENTS.md: created
+[4/4] .gitignore      .map-it-all/ added
+```
+
+1. **Builds the map and the connections** (import graph, who calls what, public surface).
+2. **Writes the MCP config** for your agent (`--agent claude|cursor|vscode|codex|all`, default Claude Code), merging with servers you already have.
+3. **Appends three lines to the very end of `CLAUDE.md` and `AGENTS.md`**, between `<!-- map-it-all:start -->` and `<!-- map-it-all:end -->` markers. Your own text is never touched, a second run changes nothing, and `uninstall` removes exactly that block.
+4. **Adds `.map-it-all/` to `.gitignore`.**
+
+Preview it first with `--dry-run`. Add `--hook` to also install the Claude Code hooks (a session-start brief and [realtime](#realtime-mode)). Use `--no-docs` to leave `CLAUDE.md`/`AGENTS.md` alone.
+
+**3. Restart your agent and ask it to "call the map-it-all `brief` tool".** Claude Code asks you to approve a project-level server once. Check with `claude mcp list`, or run `npx -y github:peterish8/map-it-all doctor`.
+
+Prefer to register the server yourself? In bash: `claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp`. In **PowerShell** quote the double dash and go through cmd, otherwise Claude Code fails with `error: unknown option '-y'`:
+
 ```powershell
-# Windows PowerShell: quote the double dash, and run npx through cmd
 claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp
 ```
 
-> PowerShell swallows an unquoted `--`, and Claude Code then fails with `error: unknown option '-y'`. If you would rather not think about quoting in any shell, let the tool write the config: `npx -y github:peterish8/map-it-all init --agent claude --npx --write` (Claude Code asks you to approve a project-level server the first time).
-
 Not on Claude Code? See [Connect your agent](#connect-your-agent).
 
-**3. Ask your agent to call `brief`.** That is the whole setup. The first call builds the map (a few seconds); after that it rebuilds only when your tree changes.
+**Update, pin, undo**
+
+```bash
+npx -y github:peterish8/map-it-all#v0.1.0 init --npx   # pin a release instead of tracking main
+npx -y github:peterish8/map-it-all uninstall           # remove the block, MCP entry and hooks; keeps your memory notes
+npx -y github:peterish8/map-it-all uninstall --purge   # also delete .map-it-all/ (only ever inside your project)
+```
 
 <details>
 <summary><b>Prefer a local clone?</b></summary>
@@ -93,17 +117,35 @@ git clone https://github.com/peterish8/map-it-all.git
 cd map-it-all && npm install            # installs ast-grep, the only dependency
 
 cd /path/to/your/project
-node /path/to/map-it-all/bin/map-it-all.mjs doctor       # checks Node, git, ast-grep, Knip, RTK
-node /path/to/map-it-all/bin/map-it-all.mjs init --write # writes the MCP config and a .gitignore entry
+node /path/to/map-it-all/bin/map-it-all.mjs doctor    # checks Node, git, ast-grep, Knip, RTK
+node /path/to/map-it-all/bin/map-it-all.mjs init      # same one command; the MCP entry points at your clone
 node /path/to/map-it-all/bin/map-it-all.mjs view --open  # the zoomable map
 ```
-
-`init` without `--write` only prints. It never edits your agent settings.
 </details>
+
+## Realtime mode
+
+Optional, **off by default**, and switchable at any time, by you or by the agent.
+
+```bash
+map-it-all realtime on        # or: off | status
+```
+
+An agent can also call the `realtime` tool (`action: on|off|status`) when it wants the map kept current during a long edit session and switch it off again afterwards. It needs the edit hook, which `init --hook` installs.
+
+How it stays cheap:
+
+- **No watcher, no daemon.** A `PostToolUse` hook fires only when the agent edits a file. While realtime is off the hook exits after one file check.
+- **One rebuild per burst.** Edits are coalesced: a detached, below-normal-priority worker waits for a quiet moment (about 1.5 s, at most 8 s), then rebuilds once. Many edits cost one build.
+- **Never blocks an edit.** The hook returns in about 0.2 s (mostly Node start-up), always exits 0, and has a 10 s timeout.
+- **Quiet by design.** After an edit the agent hears something only if it matters: the file holds `public` records, many files import it, or a recent edit left something with no references. Each warning is delivered once, in under 560 characters.
+- **Safe reads.** Map files are written atomically and readers wait for a rebuild in progress, so a tool call never sees a half-written map.
+
+On a 2,500-file monorepo a background rebuild takes about 5 seconds of one low-priority core, roughly 7 seconds after the last edit of a burst.
 
 ## Connect your agent
 
-`map-it-all init --agent <claude|cursor|vscode|codex|all> [--npx] [--write]` prints (or, with `--write`, merges) the right config for your OS and keeps any servers you already have. By hand:
+`map-it-all init --agent <claude|cursor|vscode|codex|all> [--npx]` writes the right config for your OS and keeps any servers you already have (`--dry-run` previews). By hand:
 
 <details open>
 <summary><b>Claude Code</b></summary>
@@ -116,10 +158,10 @@ claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp
 claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp
 
 # any shell, no `--` to get wrong: the tool writes .mcp.json for you
-npx -y github:peterish8/map-it-all init --agent claude --npx --write
+npx -y github:peterish8/map-it-all init --agent claude --npx
 ```
 
-Start every session with the brief by adding a `SessionStart` hook to `.claude/settings.json`:
+`init --hook` adds a `SessionStart` hook to `.claude/settings.json` (and the realtime edit hook). The session hook rebuilds only if HEAD or the working tree changed, saves the baseline that `diff` compares against, and prints the brief, which Claude Code adds to the session. By hand it is:
 
 ```json
 {
@@ -130,8 +172,6 @@ Start every session with the brief by adding a `SessionStart` hook to `.claude/s
   }
 }
 ```
-
-The hook rebuilds only if HEAD or the working tree changed, saves the baseline that `diff` compares against, and prints the brief, which Claude Code adds to the session.
 </details>
 
 <details>
@@ -174,9 +214,9 @@ args = ["-y", "github:peterish8/map-it-all", "mcp", "--root", "/absolute/path/to
 ```
 </details>
 
-By default the server maps the directory the client starts it in. Use `--root <dir>` or `MAP_IT_ALL_ROOT` to point elsewhere. Add `--profile minimal` to expose four tools (about 670 tokens of definitions) instead of nine. More in [docs/agents.md](docs/agents.md).
+By default the server maps the directory the client starts it in. Use `--root <dir>` or `MAP_IT_ALL_ROOT` to point elsewhere. Add `--profile minimal` to expose four tools (about 670 tokens of definitions) instead of ten. More in [docs/agents.md](docs/agents.md).
 
-Then add three lines to your `CLAUDE.md` / `AGENTS.md` ([snippet](examples/CLAUDE.md.snippet)):
+`init` writes these three lines to the end of your `CLAUDE.md` / `AGENTS.md` for you ([snippet](examples/CLAUDE.md.snippet) if you prefer to paste them):
 
 ```markdown
 - Start each session with the map-it-all `brief` tool. Before editing or deleting, use `connections` and `find`.
@@ -264,17 +304,20 @@ health-route-stays-above-the-routers-3fdf2  [decision] STALE
 | `diff` | What did this session newly orphan? |
 | `memory` | `remember`, `recall`, `confirm`, `forget`, `list`: notes anchored to files |
 | `handoff` | `save` at the end, `read` at the start |
+| `realtime` | Turn the [realtime refresh](#realtime-mode) on, off, or read its status |
 | `refresh`, `view` | Rebuild now (optionally with Knip); path of the zoomable map |
 
-Profiles (`--profile`): `minimal` is brief, find, connections, memory; `standard` (default) adds file, leads, symbol, diff, handoff; `full` adds refresh and view. Every tool is also a CLI command, so the terminal and the agent always agree.
+Profiles (`--profile`): `minimal` is brief, find, connections, memory; `standard` (default) adds file, leads, symbol, diff, handoff, realtime; `full` adds refresh and view. Every tool is also a CLI command, so the terminal and the agent always agree.
 
 ## CLI
 
 ```text
 map-it-all demo [--open]                try it on a bundled sample, touching nothing of yours
-map-it-all init [--agent ..] [--npx] [--write]   print or write the MCP config and hook
+map-it-all init [--npx] [--hook] [--dry-run]   map + MCP config + CLAUDE.md/AGENTS.md block + .gitignore
+map-it-all uninstall [--purge]          remove what init added (keeps memory unless --purge)
+map-it-all realtime [on|off|status]     keep the map fresh as the agent edits (needs init --hook)
 map-it-all doctor                       check Node, git, ast-grep, Knip, RTK, the map
-map-it-all build [--with-knip]          build the map (a few seconds)
+map-it-all build [--with-knip]          build the map (about 5 s on 2,500 files, under 1 s on small repos)
 map-it-all view [--open]                the zoomable map page
 map-it-all brief | session-start        the session brief | rebuild, snapshot, brief (a hook)
 map-it-all query <text> [--kind k] [--flag f]
@@ -356,7 +399,7 @@ Zero config works. To override detection, add `map-it-all.config.json` at the re
 | Memory is tied to code | Yes, by file hash; flags stale | Not their focus | Not by file hash, typically | No |
 | Marks what shipped clients may still call (VERIFY, not REMOVE) | Yes (`public`) | Not their focus | Not their focus | No |
 | Needs a model, vector store or API key | No | No | Typically yes | No |
-| Tool-definition cost | ~670 to ~1,270 tokens | Varies by server | Varies | n/a (CLI hook) |
+| Tool-definition cost | ~670 to ~1,400 tokens | Varies by server | Varies | n/a (CLI hook) |
 
 They are complements: run a call-graph server for exact call graphs, MAP-IT-ALL for the brief, registration facts and memory, RTK for shell output.
 
@@ -379,7 +422,7 @@ No. Those give exact, type-aware call graphs. MAP-IT-ALL gives registration and 
 
 <details>
 <summary><b>How big a repo can it handle, and how slow is it?</b></summary>
-On a real 2,500-file TypeScript/Kotlin monorepo (Convex, Express, Expo) a full build takes about 7 seconds and parity checks pass (Convex 134/134 functions, Express 93/93 routes). It rebuilds only when HEAD or the working tree changed.
+On a real 2,500-file TypeScript/Kotlin monorepo (Convex, Express, Expo) a full build takes about 4 to 5 seconds (7 to 11 in v0.1.0), a small repo under a second, and parity checks pass (Convex 134/134 functions, Express 93/93 routes). Reads check freshness in well under a second and rebuild only when HEAD or the working tree changed. With [realtime](#realtime-mode) on, a background rebuild runs once per burst of edits, at low priority.
 </details>
 
 <details>
@@ -394,7 +437,7 @@ Project memory asks "what did we decide about this file, and is that still true?
 
 <details>
 <summary><b>Where do the map, notes and handoff live?</b></summary>
-In <code>.map-it-all/</code> in your project (gitignored by <code>init --write</code>). Set <code>memoryDir</code> to keep notes somewhere tracked.
+In <code>.map-it-all/</code> in your project (gitignored by <code>init</code>). Set <code>memoryDir</code> to keep notes somewhere tracked.
 </details>
 
 <details>
@@ -409,7 +452,7 @@ Ideas, not promises. Open an issue to vote or to propose.
 - More packs: Next.js route handlers, Hono/Fastify, NestJS, tRPC
 - Convex nested module folders
 - Optional import of SCIP indexes for exact call edges
-- A `watch` mode and a lighter incremental build for very large repos
+- A per-file incremental build for very large repos (today realtime rebuilds the whole map once per burst)
 - Publish to npm and the MCP registry
 
 ## Contributing
@@ -418,7 +461,7 @@ Issues and pull requests are welcome, especially **a wrong or missing result wit
 
 ```bash
 git clone https://github.com/peterish8/map-it-all.git && cd map-it-all
-npm install && npm test       # 21 tests: packs, import resolution, memory, MCP protocol, CLI
+npm install && npm test       # 33 tests: packs, import resolution, memory, MCP protocol, CLI, init, realtime
 ```
 
 ## Acknowledgements

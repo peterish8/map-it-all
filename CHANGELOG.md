@@ -4,8 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **One-command `init`**: builds the map and connections, writes the MCP config, appends an instruction block to the very end of `CLAUDE.md` and `AGENTS.md` (marker-delimited, idempotent, keeps line endings, same-file/symlink aware) and adds `.map-it-all/` to `.gitignore`. Flags: `--dry-run`, `--npx`, `--hook`, `--no-build`, `--no-docs`, `--docs claude|agents|both`, `--agent`, `--profile`. `init` now writes by default; `--write` is no longer needed.
+- **`uninstall [--purge]`** removes exactly what `init` added. `--purge` deletes the map folder only when it lives inside the project.
+- **Realtime mode** (off by default): `realtime on|off|status` on the CLI and as an MCP `realtime` tool, so an agent can toggle it. A `PostToolUse` edit hook (`touch`) schedules one coalesced, low-priority background rebuild per burst of edits and tells the agent, once and briefly, about public records, heavily imported files and newly orphaned records. No watcher or daemon.
+- `init --hook` installs the SessionStart brief and the realtime edit hook, preserving your own hooks.
+
+### Changed
+- Faster builds: a 2,500-file monorepo went from about 11 s to about 4 to 5 s. Backtracking path regexes were replaced by linear tokenisation, npm-script references are found in one pass, and each file is stat'ed once.
+- Map files are written atomically (stamp last) and readers wait for a build in progress, so a tool call never sees a half-written map.
+- The MCP `standard` and `full` profiles include the `realtime` tool (about 1,270 and 1,400 tokens of definitions).
+
 ### Fixed
-- Docs: the Claude Code one-liner failed in Windows PowerShell with `unknown option '-y'` because PowerShell swallows an unquoted `--`. The README and `docs/agents.md` now show the PowerShell form (`'--'`) and a shell-independent alternative (`init --agent claude --npx --write`).
+- Docs: the Claude Code one-liner failed in Windows PowerShell with `unknown option '-y'` because PowerShell swallows an unquoted `--`. The README and `docs/agents.md` now show the PowerShell form (`'--'`) and a shell-independent alternative (`init --agent claude --npx`).
 
 ## [0.1.0] - 2026-11-15
 

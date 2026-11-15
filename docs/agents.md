@@ -10,13 +10,13 @@ claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp           # 
 claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp  # Windows PowerShell
 ```
 
-**PowerShell note:** PowerShell swallows an unquoted `--` before `claude` sees it, so `claude mcp add map-it-all -- npx -y …` fails with `error: unknown option '-y'`. Quote it as `'--'` (tested), or avoid it entirely with `npx -y github:peterish8/map-it-all init --agent claude --npx --write`, which writes `.mcp.json` in your project. Claude Code asks you to approve a project-level server the first time it starts. Native Windows also needs `cmd /c` in front of `npx`.
+**PowerShell note:** PowerShell swallows an unquoted `--` before `claude` sees it, so `claude mcp add map-it-all -- npx -y …` fails with `error: unknown option '-y'`. Quote it as `'--'` (tested), or avoid it entirely with `npx -y github:peterish8/map-it-all init --agent claude --npx`, which writes `.mcp.json` in your project. Claude Code asks you to approve a project-level server the first time it starts. Native Windows also needs `cmd /c` in front of `npx`.
 
-`map-it-all init --npx` prints (or with `--write` merges) the same thing for Claude Code, Cursor, VS Code and Codex, with `cmd /c` added on Windows. The server maps the directory the client starts it in; pass `--root <dir>` or set `MAP_IT_ALL_ROOT` to point elsewhere. The config blocks below use a local clone instead (`node <MAP>/bin/map-it-all.mjs`), which is faster to start and works offline.
+`map-it-all init --npx` writes (or with `--dry-run` previews) the same thing for Claude Code, Cursor, VS Code and Codex, with `cmd /c` added on Windows. The server maps the directory the client starts it in; pass `--root <dir>` or set `MAP_IT_ALL_ROOT` to point elsewhere. The config blocks below use a local clone instead (`node <MAP>/bin/map-it-all.mjs`), which is faster to start and works offline.
 
 ## With a local clone
 
-`map-it-all init` prints each config below with your absolute paths filled in. `--write` merges it into the file for you (existing servers are kept) and adds `.map-it-all/` to `.gitignore`. Nothing else is ever edited.
+`map-it-all init` writes each config below with your absolute paths filled in, keeping existing servers, appends a marked block to the end of `CLAUDE.md` and `AGENTS.md`, and adds `.map-it-all/` to `.gitignore`. `--dry-run` previews; `uninstall` reverses it.
 
 Replace `<MAP>` with the path of this repo and `<PROJECT>` with the project you want mapped.
 
@@ -83,7 +83,7 @@ Add to `CLAUDE.md` / `AGENTS.md`:
 
 ## Keep the tool surface small
 
-Every connected tool is paid for on every request. `--profile minimal` exposes four tools (about 670 tokens); `standard` nine (about 1,150). Add it to the args: `"--profile", "minimal"`. Run `map-it-all tokens` to see the numbers for your install.
+Every connected tool is paid for on every request. `--profile minimal` exposes four tools (about 670 tokens); `standard` ten (about 1,270). Add it to the args: `"--profile", "minimal"`. Run `map-it-all tokens` to see the numbers for your install.
 
 ## Troubleshooting
 
