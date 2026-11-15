@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The MCP `standard` and `full` profiles include the `realtime` tool (about 1,270 and 1,400 tokens of definitions).
 
 ### Fixed
+- Docs: a per-OS setup guide for macOS, Windows (PowerShell, cmd, Git Bash) and Linux/WSL: installing Node and git, the right `claude mcp add` form for each shell, opening the map, and the usual PATH, execution-policy and cross-OS `.mcp.json` pitfalls.
 - Docs: the Claude Code one-liner failed in Windows PowerShell with `unknown option '-y'` because PowerShell swallows an unquoted `--`. The README and `docs/agents.md` now show the PowerShell form (`'--'`) and a shell-independent alternative (`init --agent claude --npx`).
 
 ## [0.1.0] - 2026-11-15

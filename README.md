@@ -17,6 +17,7 @@
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
+  <a href="#setup-by-operating-system">macOS · Windows · Linux</a> ·
   <a href="#what-you-get">What you get</a> ·
   <a href="#connect-your-agent">Connect your agent</a> ·
   <a href="#see-it-work">Example</a> ·
@@ -57,7 +58,16 @@ It does **not** replace a language server or a call-graph tool. For exact, type-
 
 ## Quickstart
 
-Needs Node 20 or newer and git.
+Works the same on **macOS, Windows and Linux** (including WSL). You need Node 20 or newer and git; the three commands below are identical on every OS and in every shell. Where the OSes differ (installing Node, registering the server by hand, troubleshooting) there is a [per-OS guide](#setup-by-operating-system) right after.
+
+**0. Check the prerequisites:**
+
+```bash
+node -v      # v20 or higher
+git --version
+```
+
+Missing one? Jump to [your OS](#setup-by-operating-system) for the install line.
 
 **1. See it first (10 seconds, touches nothing of yours):**
 
@@ -73,7 +83,7 @@ That maps a bundled sample project into your temp folder and opens the zoomable 
 npx -y github:peterish8/map-it-all init --npx
 ```
 
-That works in bash, zsh and PowerShell alike, and it does everything:
+That works in bash, zsh, fish, PowerShell and cmd alike (on Windows it writes the `cmd /c npx` form the MCP config needs), and it does everything:
 
 ```text
 [1/4] Map             built in 0.6 s: 46 files, packs: convex, express, expo
@@ -93,15 +103,154 @@ Preview it first with `--dry-run`. Add `--hook` to also install the Claude Code 
 
 **3. Restart your agent and ask it to "call the map-it-all `brief` tool".** Claude Code asks you to approve a project-level server once. Check with `claude mcp list`, or run `npx -y github:peterish8/map-it-all doctor`.
 
-Prefer to register the server yourself? In bash: `claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp`. In **PowerShell** quote the double dash and go through cmd, otherwise Claude Code fails with `error: unknown option '-y'`:
+Prefer to register the server yourself, or not on Claude Code? The per-OS commands are in the next section, and [Connect your agent](#connect-your-agent) covers Cursor, VS Code and Codex.
+
+## Setup by operating system
+
+Pick your OS. Each one has the same four parts: install the prerequisites, run `init`, register by hand if you prefer, and fix the usual problems.
+
+<details open>
+<summary><b>macOS</b> (Terminal, iTerm, zsh or bash)</summary>
+
+**Install Node and git** with [Homebrew](https://brew.sh):
+
+```bash
+brew install node git
+node -v && git --version
+```
+
+No Homebrew? Download the LTS installer from [nodejs.org](https://nodejs.org), and run `xcode-select --install` for git.
+
+**Set up, from your project folder:**
+
+```bash
+cd ~/code/my-project
+npx -y github:peterish8/map-it-all init --npx
+```
+
+**Register by hand (Claude Code):**
+
+```bash
+claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp
+claude mcp list                                   # map-it-all should be listed
+npx -y github:peterish8/map-it-all doctor         # checks Node, git, ast-grep, the map
+```
+
+**Open the map:** `npx -y github:peterish8/map-it-all view --open`
+
+**Good to know:** if `node` or `npx` is "command not found" right after installing, open a new terminal tab. On Apple Silicon, Homebrew lives in `/opt/homebrew`; if `brew` itself is not found, run `eval "$(/opt/homebrew/bin/brew shellenv)"` and add that line to `~/.zprofile`.
+</details>
+
+<details>
+<summary><b>Windows</b> (PowerShell, Windows Terminal, cmd, Git Bash)</summary>
+
+**Install Node and git** with winget (built into Windows 10 and 11), then **open a new terminal** so `PATH` refreshes:
 
 ```powershell
+winget install OpenJS.NodeJS.LTS
+winget install Git.Git
+node -v; git --version
+```
+
+No winget? Use the installers from [nodejs.org](https://nodejs.org) and [git-scm.com](https://git-scm.com).
+
+**Set up, from your project folder** (same line in PowerShell, cmd and Git Bash):
+
+```powershell
+cd C:\code\my-project
+npx -y github:peterish8/map-it-all init --npx
+```
+
+`init` writes the Windows form of the MCP entry for you (`cmd /c npx ...`), because Windows cannot launch `npx` directly from an MCP config.
+
+**Register by hand (Claude Code).** The shell matters here:
+
+```powershell
+# PowerShell: quote the double dash (PowerShell swallows a bare --) and go through cmd
 claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp
 ```
 
-Not on Claude Code? See [Connect your agent](#connect-your-agent).
+```bat
+:: cmd.exe
+claude mcp add map-it-all -- cmd /c npx -y github:peterish8/map-it-all mcp
+```
 
-**Update, pin, undo**
+```bash
+# Git Bash or WSL: the macOS/Linux form
+claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp
+```
+
+Then `claude mcp list` and `npx -y github:peterish8/map-it-all doctor`.
+
+**Open the map:** `npx -y github:peterish8/map-it-all view --open`
+
+**Good to know:**
+
+- `error: unknown option '-y'` means PowerShell ate the `--`. Use the quoted `'--'` above, or sidestep the problem with `npx -y github:peterish8/map-it-all init --agent claude --npx`.
+- `npx.ps1 cannot be loaded because running scripts is disabled`: run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or call `npx.cmd` instead of `npx`.
+- Cursor and VS Code configs on Windows use `"command": "cmd", "args": ["/c", "npx", ...]`; `init --agent cursor` or `--agent vscode` writes that for you.
+- Project-scope servers need a one-time approval inside Claude Code (see step 3).
+- Prefer Linux tooling? Everything in the **Linux** section works inside WSL. Install Node inside WSL too: `which node` must not point at `/mnt/c/...`.
+</details>
+
+<details>
+<summary><b>Linux</b> (Ubuntu, Debian, Fedora, Arch and others, bash, zsh or fish; also WSL)</summary>
+
+**Install Node 20+ and git.** Distro packages are sometimes older than Node 20, so check `node -v` after installing. If it is too old, use [nvm](https://github.com/nvm-sh/nvm) (follow the install line in its README), which needs no root:
+
+```bash
+# Debian / Ubuntu
+sudo apt update && sudo apt install -y git curl
+# Fedora / RHEL
+sudo dnf install -y git nodejs npm
+# Arch
+sudo pacman -S git nodejs npm
+
+# any distro, if node is older than v20: install nvm (see its README), then
+nvm install --lts
+node -v && git --version
+```
+
+**Set up, from your project folder:**
+
+```bash
+cd ~/code/my-project
+npx -y github:peterish8/map-it-all init --npx
+```
+
+**Register by hand (Claude Code):**
+
+```bash
+claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp
+claude mcp list
+npx -y github:peterish8/map-it-all doctor
+```
+
+**Open the map:** `npx -y github:peterish8/map-it-all view --open` uses `xdg-open`. On a server, over SSH or in a container there is no browser, so run `view` without `--open`: it prints the path of `graph.html` to copy to a machine that has one. On WSL, open the file from Windows Explorer (`explorer.exe .` in the folder).
+
+**Good to know:**
+
+- With `nvm`, make sure the shell that launches your agent loads it (it must see the same `node` as your terminal). If an editor starts the MCP server and fails with `npx: not found`, put the absolute path from `which npx` in the config's `command` field.
+- `npx` needs git to fetch `github:` packages; install it if you see `spawn git ENOENT`.
+- Behind a proxy or offline? Use the [local clone](#prefer-a-local-clone) below, which needs the network only for `npm install`.
+</details>
+
+### Same thing, side by side
+
+| | macOS / Linux / WSL / Git Bash | Windows PowerShell | Windows cmd |
+| --- | --- | --- | --- |
+| Set up | `npx -y github:peterish8/map-it-all init --npx` | same | same |
+| Register (Claude Code) | `claude mcp add map-it-all -- npx -y github:peterish8/map-it-all mcp` | `claude mcp add map-it-all '--' cmd /c npx -y github:peterish8/map-it-all mcp` | `claude mcp add map-it-all -- cmd /c npx -y github:peterish8/map-it-all mcp` |
+| Verify | `claude mcp list` and `... doctor` | same | same |
+| Realtime on / off | `npx -y github:peterish8/map-it-all realtime on` | same | same |
+| Open the map | `... view --open` (`open` on macOS, `xdg-open` on Linux) | `... view --open` | `... view --open` |
+| Remove | `... uninstall` (add `--purge` to delete `.map-it-all/`) | same | same |
+
+(`...` stands for `npx -y github:peterish8/map-it-all`.)
+
+### Update, pin, undo
+
+Same on every OS:
 
 ```bash
 npx -y github:peterish8/map-it-all#v0.1.0 init --npx   # pin a release instead of tracking main
@@ -109,19 +258,32 @@ npx -y github:peterish8/map-it-all uninstall           # remove the block, MCP e
 npx -y github:peterish8/map-it-all uninstall --purge   # also delete .map-it-all/ (only ever inside your project)
 ```
 
-<details>
-<summary><b>Prefer a local clone?</b></summary>
+`npx` caches what it fetches, so a newer `main` may not be picked up right away. Pin a tag (above) for a predictable version, or delete the `_npx` folder inside the directory printed by `npm config get cache` to force a fresh download.
+
+**Working with teammates on other operating systems?** `init --npx` writes the MCP entry for the OS it runs on (`cmd /c npx` on Windows, plain `npx` elsewhere), so a committed `.mcp.json` from one OS will not start on the other. Either have each person run `init` locally and leave `.mcp.json` uncommitted, or commit one OS's file and let the others re-run `init`.
+
+### Prefer a local clone?
 
 ```bash
 git clone https://github.com/peterish8/map-it-all.git
 cd map-it-all && npm install            # installs ast-grep, the only dependency
-
-cd /path/to/your/project
-node /path/to/map-it-all/bin/map-it-all.mjs doctor    # checks Node, git, ast-grep, Knip, RTK
-node /path/to/map-it-all/bin/map-it-all.mjs init      # same one command; the MCP entry points at your clone
-node /path/to/map-it-all/bin/map-it-all.mjs view --open  # the zoomable map
 ```
-</details>
+
+Then, from your project folder, call the script by its path:
+
+```bash
+# macOS / Linux / WSL
+node ~/code/map-it-all/bin/map-it-all.mjs doctor
+node ~/code/map-it-all/bin/map-it-all.mjs init      # the MCP entry points at your clone
+node ~/code/map-it-all/bin/map-it-all.mjs view --open
+```
+
+```powershell
+# Windows PowerShell
+node C:\code\map-it-all\bin\map-it-all.mjs doctor
+node C:\code\map-it-all\bin\map-it-all.mjs init
+node C:\code\map-it-all\bin\map-it-all.mjs view --open
+```
 
 ## Realtime mode
 
