@@ -10,16 +10,20 @@
 //   * On/off is a flag file, so it can be flipped mid-session (CLI, or the `realtime` MCP tool).
 
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadStore } from './store.mjs';
+import { acquireBuildLock, acquireNamedLock, buildLockHeld, lockHeld, releaseBuildLock, waitForBuildLock } from './build-lock.mjs';
 
-const LOCK_STALE_MS = 5 * 60 * 1000;
+export { lockHeld };
+
 const NOTE_TTL_MS = 10 * 60 * 1000;
 const NOTE_MAX_CHARS = 560;
 const NOTES_CAP = 30;
+const DEFAULT_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../bin/map-it-all.mjs');
 
 const file = (out, name) => path.join(out, name);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,9 +35,82 @@ function readJson(f, fallback) {
 
 function writeJson(f, value) {
   mkdirSync(path.dirname(f), { recursive: true });
-  const tmp = `${f}.${process.pid}.tmp`;
+  const tmp = `${f}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(tmp, JSON.stringify(value));
   renameSync(tmp, f);
+}
+
+const pendingFile = (out) => file(out, 'pending.json');
+const claimPrefix = 'pending.claim.';
+const claimFiles = (out) => readdirSync(out).filter((name) => name.startsWith(claimPrefix) && name.endsWith('.json')).map((name) => file(out, name));
+const newPending = () => ({ at: Date.now(), generation: randomUUID() });
+
+/** Move the queue marker out atomically, leaving a fresh path for the next touch. */
+function claimPending(out) {
+  const claim = file(out, `${claimPrefix}${randomUUID()}.json`);
+  try {
+    renameSync(pendingFile(out), claim);
+    let marker = readJson(claim, null);
+    if (typeof marker?.generation !== 'string') {
+      marker = { ...(marker ?? {}), at: marker?.at ?? Date.now(), generation: randomUUID() };
+      writeJson(claim, marker);
+    }
+    return { path: claim, marker };
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/** Recover interrupted claims without replacing a newer queued marker. */
+function recoverClaims(out, claims = claimFiles(out)) {
+  for (const claim of claims) {
+    if (!existsSync(claim)) continue;
+    const claimed = readJson(claim, null);
+    const queued = readJson(pendingFile(out), null);
+    if (typeof queued?.generation === 'string' && typeof claimed?.generation === 'string'
+      && (queued.generation === claimed.generation || (Number.isFinite(queued.at) && Number.isFinite(claimed.at) && queued.at > claimed.at))) {
+      // Drop a claim only when the queue repeats it or is provably newer. An
+      // unreadable/partial/ambiguous marker is not proof that the claim is safe to drop.
+      try { unlinkSync(claim); } catch { /* already gone */ }
+      continue;
+    }
+    if (existsSync(pendingFile(out))) continue;
+    let fd;
+    try { fd = openSync(pendingFile(out), 'wx'); } catch (error) {
+      if (error.code === 'EEXIST') {
+        const raced = readJson(pendingFile(out), null);
+        if (typeof raced?.generation === 'string' && typeof claimed?.generation === 'string'
+          && (raced.generation === claimed.generation || (Number.isFinite(raced.at) && Number.isFinite(claimed.at) && raced.at > claimed.at))) { try { unlinkSync(claim); } catch {} }
+      }
+      continue;
+    }
+    try { writeFileSync(fd, readFileSync(claim)); }
+    catch (error) { try { unlinkSync(pendingFile(out)); } catch {} throw error; }
+    finally { closeSync(fd); }
+    try { unlinkSync(claim); } catch { /* already gone */ }
+  }
+}
+
+async function launchWorker(root, out, bin = DEFAULT_BIN) {
+  const ready = file(out, `worker-ready.${randomUUID()}`);
+  let child;
+  try {
+    child = spawn(process.execPath, [path.resolve(bin), 'rebuild-worker', '--root', path.resolve(root), '--out', path.resolve(out), '--worker-ready', ready], { cwd: os.tmpdir(), detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref();
+  } catch { return false; }
+  // Keep the start lock through the child's worker-lock acknowledgment. This short
+  // bound keeps edit hooks responsive; a later touch retries a startup that missed it.
+  const until = performance.now() + 350;
+  while (performance.now() < until) {
+    if (existsSync(ready)) { try { unlinkSync(ready); } catch {} return true; }
+    if (child.exitCode !== null) return false;
+    await sleep(15);
+  }
+  if (existsSync(ready)) { try { unlinkSync(ready); } catch {} return true; }
+  // The process was launched and may still be starting under heavy load. The
+  // durable pending marker remains the retry signal if it later exits before ready.
+  return child.exitCode === null;
 }
 
 // ---------- on / off ----------
@@ -44,57 +121,45 @@ export function setEnabled(out, enabled) {
   writeJson(file(out, 'realtime.json'), { enabled: Boolean(enabled), updatedAt: new Date().toISOString() });
 }
 
-export function status(out) {
+export async function status(out) {
   const s = readJson(file(out, 'realtime.json'), {});
   const notes = readJson(file(out, 'realtime-notes.json'), { items: [] }).items.filter((n) => !n.delivered).length;
-  return { enabled: s.enabled === true, updatedAt: s.updatedAt ?? null, rebuilding: lockHeld(out), undeliveredNotes: notes };
+  return { enabled: s.enabled === true, updatedAt: s.updatedAt ?? null, rebuilding: await buildLockHeld(out), undeliveredNotes: notes };
 }
 
 // ---------- the build lock ----------
 
-const alive = (pid) => {
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
-};
-
-export function lockHeld(out) {
-  const lock = readJson(file(out, 'build.lock'), null);
-  if (!lock) return false;
-  if (Date.now() - lock.at > LOCK_STALE_MS || !alive(lock.pid)) { try { unlinkSync(file(out, 'build.lock')); } catch { /* raced */ } return false; }
-  return true;
-}
-
-function tryLock(out) {
-  if (lockHeld(out)) return false;
-  mkdirSync(out, { recursive: true });
-  try {
-    const fd = openSync(file(out, 'build.lock'), 'wx');
-    writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-    closeSync(fd);
-    return true;
-  } catch { return false; }
-}
-
-function releaseLock(out) {
-  const lock = readJson(file(out, 'build.lock'), null);
-  if (lock?.pid === process.pid) { try { unlinkSync(file(out, 'build.lock')); } catch { /* gone */ } }
-}
-
 /** Wait (bounded) for a background build to finish, so a reader never races a half-written map. */
 export async function waitForLock(out, maxMs = 30000) {
-  const start = Date.now();
-  while (lockHeld(out) && Date.now() - start < maxMs) await sleep(150);
-  return !lockHeld(out);
+  return waitForBuildLock(out, maxMs);
 }
 
 // ---------- scheduling ----------
 
 /** Record that something changed and make sure exactly one worker will rebuild after it settles. */
-export function scheduleRebuild({ root, out, bin }) {
-  writeJson(file(out, 'pending.json'), { at: Date.now() });
-  if (lockHeld(out)) return 'running';
-  const child = spawn(process.execPath, [bin, 'rebuild-worker', '--root', root, '--out', out], { detached: true, stdio: 'ignore', windowsHide: true });
-  child.unref();
-  return 'started';
+export async function scheduleRebuild({ root, out, bin }) {
+  writeJson(pendingFile(out), newPending());
+  return await requestWorker(root, out, bin) ? 'started' : 'running';
+}
+
+async function requestWorker(root, out, bin) {
+  const start = await acquireNamedLock(out, 'worker-start.lock', { wait: false });
+  if (!start) return false;
+  try {
+    // A live worker already owns the election lock, including while it waits
+    // behind an ordinary build. The start lock serializes this probe with launches.
+    const probe = await acquireNamedLock(out, 'worker.lock', { wait: false });
+    if (!probe) return false;
+    await releaseBuildLock(probe);
+    return await launchWorker(root, out, bin);
+  }
+  finally { await releaseBuildLock(start); }
+}
+
+/** Release handoff used by ordinary builds that saw a touch while holding the shared lock. */
+export async function handoffQueuedWork({ root, out, bin }) {
+  if (!existsSync(pendingFile(out)) && claimFiles(out).length === 0) return false;
+  return requestWorker(root, out, bin);
 }
 
 function refSnapshot(out) {
@@ -122,29 +187,84 @@ function recordOrphans(out, before) {
  * The background worker. Waits for a quiet period, rebuilds once for the whole burst, repeats only if
  * more edits landed during the build. `debounceMs` and `maxWaitMs` are parameters so tests are quick.
  */
-export async function runWorker({ root, out, debounceMs = 1500, maxWaitMs = 8000 }) {
-  if (!tryLock(out)) return 'busy';
+export async function runWorker({ root, out, debounceMs = 1500, maxWaitMs = 8000, build: buildOverride, wait = sleep, now = () => performance.now(), hooks = {}, bin, lockWait = false, readyFile }) {
+  const startupDelay = Number(process.env.MAP_IT_ALL_TEST_WORKER_START_DELAY_MS);
+  if (Number.isFinite(startupDelay) && startupDelay > 0) await sleep(Math.min(startupDelay, 5000));
+  // Lock order is always worker election, then shared publication lock. The worker
+  // election lock spans debounce and any wait for an ordinary writer.
+  // Never queue another worker behind a live worker. Launchers serialize startup
+  // and the elected child acknowledges only after owning this lock.
+  const worker = await acquireNamedLock(out, 'worker.lock', { wait: false });
+  if (!worker) return 'busy';
+  if (readyFile) { try { writeFileSync(readyFile, String(process.pid)); } catch {} }
+  let owner;
+  let succeeded = false;
+  let operationError;
   try {
+    owner = await acquireBuildLock(out, { wait: lockWait });
+    if (!owner) { await releaseBuildLock(worker); return 'busy'; }
     try { os.setPriority(0, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* not permitted: fine */ }
-    const { buildMap } = await import('./build.mjs');
+    recoverClaims(out);
+    const { buildMap: defaultBuild } = buildOverride ? {} : await import('./build.mjs');
+    const buildMap = buildOverride ?? defaultBuild;
     for (let round = 0; round < 20; round++) {
-      let pending = readJson(file(out, 'pending.json'), null);
-      if (!pending) break;
-      const started = Date.now();
+      const first = claimPending(out);
+      if (!first) break;
+      const claims = [first.path];
+      let pending = first.marker ?? newPending();
+      await hooks.afterClaim?.({ root, out, round, marker: pending });
+      const started = now();
       for (;;) {
-        await sleep(debounceMs);
-        const latest = readJson(file(out, 'pending.json'), pending);
-        const settled = latest.at === pending.at;
-        pending = latest;
-        if (settled || Date.now() - started > maxWaitMs) break;
+        const remaining = Math.max(0, maxWaitMs - (now() - started));
+        if (remaining === 0) break;
+        await wait(Math.min(debounceMs, remaining));
+        const latest = claimPending(out);
+        if (!latest) break;
+        claims.push(latest.path);
+        const settled = latest.marker?.generation === pending.generation;
+        pending = latest.marker ?? pending;
+        if (settled || now() - started >= maxWaitMs) break;
       }
       const before = refSnapshot(out);
-      await buildMap({ root, out });
-      recordOrphans(out, before);
-      const after = readJson(file(out, 'pending.json'), null);
-      if (!after || after.at === pending.at) { try { unlinkSync(file(out, 'pending.json')); } catch { /* gone */ } break; }
+      try {
+        await hooks.beforeBuild?.({ root, out, round, marker: pending });
+        await buildMap({ root, out, buildLock: owner });
+        recordOrphans(out, before);
+        for (const claim of claims) { try { unlinkSync(claim); } catch { /* gone */ } }
+        await hooks.afterBuild?.({ root, out, round, marker: pending });
+      } catch (error) {
+        recoverClaims(out, claims);
+        throw error;
+      }
     }
-  } finally { releaseLock(out); }
+    succeeded = true;
+  } catch (error) { operationError = error; }
+  const cleanupErrors = [];
+  try { await hooks.beforeRelease?.({ root, out }); } catch (error) { cleanupErrors.push(error); }
+  if (owner) try { await releaseBuildLock(owner); } catch (error) { cleanupErrors.push(error); }
+  try { await hooks.afterRelease?.({ root, out }); } catch (error) { cleanupErrors.push(error); }
+  try { await releaseBuildLock(worker); } catch (error) { cleanupErrors.push(error); }
+  if (readyFile) { try { unlinkSync(readyFile); } catch {} }
+  // Recheck after both locks release; touches racing the last queue scan remain durable.
+  if (succeeded && worker.ownershipReleased && (!owner || owner.ownershipReleased) && (existsSync(pendingFile(out)) || claimFiles(out).length)) {
+    try {
+      if (hooks.onHandoff) await hooks.onHandoff({ root, out });
+      else await handoffQueuedWork({ root, out, bin });
+    } catch (error) { cleanupErrors.push(error); }
+  }
+  if (operationError) {
+    try { writeJson(file(out, 'realtime-error.json'), { at: new Date().toISOString(), message: String(operationError.stack ?? operationError) }); }
+    catch (error) { cleanupErrors.push(error); }
+  } else if (succeeded && !cleanupErrors.length) {
+    try { unlinkSync(file(out, 'realtime-error.json')); } catch (error) { if (error.code !== 'ENOENT') cleanupErrors.push(error); }
+  }
+  if (operationError && cleanupErrors.length) {
+    Object.defineProperty(operationError, 'cleanupErrors', { value: cleanupErrors, configurable: true });
+    throw operationError;
+  }
+  if (operationError) throw operationError;
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) throw new AggregateError(cleanupErrors, 'Worker cleanup failed');
   return 'done';
 }
 
@@ -204,7 +324,7 @@ export function findProject(start, outName = '.map-it-all') {
  * Returns the JSON string to print (additionalContext is the only way context reaches Claude), or ''.
  * Never throws: a hook must not be able to get in the way of an edit.
  */
-export function handleEdit(input, { bin }) {
+export async function handleEdit(input, { bin }) {
   try {
     const project = findProject(input.cwd || process.cwd());
     if (!project || !isEnabled(project.out)) return '';
@@ -212,7 +332,7 @@ export function handleEdit(input, { bin }) {
     if (typeof target !== 'string' || !target) return '';
     const rel = path.relative(project.root, path.resolve(project.root, target)).replaceAll('\\', '/');
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || /(^|\/)(node_modules|\.git|\.map-it-all)\//.test(rel)) return '';
-    scheduleRebuild({ root: project.root, out: project.out, bin });
+    await scheduleRebuild({ root: project.root, out: project.out, bin });
     const note = noteFor({ out: project.out, rel });
     return note ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: note } }) : '';
   } catch { return ''; }

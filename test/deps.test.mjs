@@ -104,6 +104,65 @@ test('deps reports partial direct coverage when one of two dependencies has no r
   } finally { rm(root); }
 });
 
+test('advisory coverage ignores workspace links and non-registry ranges but still checks external dependencies', async () => {
+  const fake = await fakeOsv({ ids: [] });
+  const root = mkdtempSync(path.join(tmpdir(), 'map-it-all-workspace-eligibility-'));
+  const out = path.join(root, '.map-it-all');
+  try {
+    write(root, 'package.json', JSON.stringify({ name: 'app', workspaces: ['packages/*'], dependencies: { 'local-pkg': '^1.0.0', lodash: '^4.0.0', 'local-link': 'file:packages/local-link' } }));
+    write(root, 'packages/local-pkg/package.json', JSON.stringify({ name: 'local-pkg', dependencies: { 'local-link': 'workspace:*', lodash: '^4.0.0' } }));
+    write(root, 'packages/local-link/package.json', JSON.stringify({ name: 'local-link' }));
+    write(root, 'package-lock.json', JSON.stringify({ lockfileVersion: 3, packages: {
+      '': { name: 'app' },
+      'node_modules/local-pkg': { resolved: 'packages/local-pkg', link: true },
+      'packages/local-pkg': { name: 'local-pkg', version: '1.0.0' },
+      'node_modules/local-link': { resolved: 'packages/local-link', link: true },
+      'packages/local-link': { name: 'local-link', version: '1.0.0' },
+      'node_modules/lodash': { version: '4.17.15' },
+      'packages/local-pkg/node_modules/lodash': { version: '4.17.15' },
+    } }));
+    await buildMap({ root, out });
+    const store = loadStore(out);
+    assert.deepEqual([...store.byId.keys()].filter((key) => key.startsWith('dep:')).sort(), ['dep:lodash']);
+    const result = await runDeps({ root, out, store, memory: createMemory({ root, dir: path.join(out, 'memory') }), config: loadConfig(root), args: {}, allowOnline: true });
+    assert.match(result, /Registry metadata: 1 of 1 direct versions cached/);
+    assert.doesNotMatch(result, /unresolved/);
+    assert.equal(loadCache(out).summary.complete, true);
+  } finally { await fake.close(); rm(root); }
+});
+
+test('pnpm workspace ranges do not count against coverage while an external range is checked', async () => {
+  const fake = await fakeOsv({ ids: [] });
+  const root = mkdtempSync(path.join(tmpdir(), 'map-it-all-pnpm-workspace-'));
+  const out = path.join(root, '.map-it-all');
+  try {
+    write(root, 'package.json', JSON.stringify({ name: 'app', dependencies: { 'local-pkg': 'workspace:*', lodash: '^4.0.0' } }));
+    write(root, 'packages/local-pkg/package.json', JSON.stringify({ name: 'local-pkg' }));
+    write(root, 'pnpm-lock.yaml', ["lockfileVersion: '9.0'", 'importers:', '  .:', '    dependencies:', '      lodash:', '        specifier: ^4.0.0', '        version: 4.17.15', '      local-pkg:', '        specifier: workspace:*', '        version: link:packages/local-pkg', 'packages:', '  lodash@4.17.15:', '    resolution: {integrity: x}', ''].join('\n'));
+    await buildMap({ root, out });
+    const store = loadStore(out);
+    const result = await runDeps({ root, out, store, memory: createMemory({ root, dir: path.join(out, 'memory') }), config: loadConfig(root), args: {}, allowOnline: true });
+    assert.match(result, /Registry metadata: 1 of 1 direct versions cached/);
+    assert.doesNotMatch(result, /1 unresolved/);
+  } finally { await fake.close(); rm(root); }
+});
+
+test('Yarn Classic missing peers do not count as unresolved advisory installs', async () => {
+  const fake = await fakeOsv({ ids: [] });
+  const { root, out } = project();
+  try {
+    write(root, 'package.json', JSON.stringify({ name: 'app', dependencies: { lodash: '^4.0.0' }, peerDependencies: { react: '^18.0.0' } }));
+    write(root, 'yarn.lock', ['# yarn lockfile v1', '', 'lodash@^4.0.0:', '  version "4.17.15"', ''].join('\n'));
+    rmSync(path.join(root, 'package-lock.json'));
+    await buildMap({ root, out });
+    const store = loadStore(out);
+    const result = await runDeps({ root, out, store, memory: createMemory({ root, dir: path.join(out, 'memory') }), config: loadConfig(root), args: {}, allowOnline: true });
+    assert.match(result, /Registry metadata: 1 of 1 direct versions cached/);
+    assert.doesNotMatch(result, /unresolved/);
+    assert.equal(loadCache(out).summary.complete, true);
+  } finally { await fake.close(); rm(root); }
+});
+
 test('every duplicate workspace declaration must resolve before direct coverage is complete', async () => {
   const fake = await fakeOsv({ ids: [] });
   const root = mkdtempSync(path.join(tmpdir(), 'map-it-all-workspaces-'));
@@ -349,9 +408,42 @@ test('the network is off unless the user turns it on, and a hostile docs URL can
 test('docs DNS answers are checked as one set before a socket is opened, including mixed and mapped addresses', async () => {
   const resolve = async () => [{ address: '93.184.216.34', family: 4 }, { address: '127.0.0.1', family: 4 }];
   await assert.rejects(fetchText('https://rebind.test/docs', { resolve }), /not a public address/);
-  for (const host of ['https://[::ffff:7f00:1]/', 'https://[2001:db8::1]/', 'https://[ff02::1]/', 'https://192.0.2.1/']) {
+  for (const host of ['https://[::ffff:7f00:1]/', 'https://[2001:db8::1]/', 'https://[ff02::1]/', 'https://192.0.0.1/', 'https://192.0.2.1/', 'https://192.168.1.1/']) {
     await assert.rejects(assertPublicUrl(host), /not a public address/);
   }
+  assert.equal((await assertPublicUrl('https://192.0.78.1/')).hostname, '192.0.78.1', 'public 192.0.78.0/24 is allowed');
+});
+
+test('address policy rejects only the exact IPv4 documentation /24s and all IPv6 2001:db8 spellings', async () => {
+  for (const address of ['198.51.100.0', '198.51.100.255', '203.0.113.0', '203.0.113.255']) {
+    await assert.rejects(assertPublicUrl(`https://${address}/`), /not a public address/);
+  }
+  for (const address of ['198.51.99.255', '198.51.101.0', '203.0.112.255', '203.0.114.0']) {
+    assert.equal((await assertPublicUrl(`https://${address}/`)).hostname, address);
+  }
+  const blocked6 = [
+    '2001:db8::1', '2001:DB8::1', '2001:0DB8::1',
+    '2001:0db8:0000:0000:0000:0000:0000:0001',
+    '::ffff:198.51.100.1', '::ffff:c633:6401', '::ffff:203.0.113.1',
+    'fe80::1%25eth0',
+  ];
+  for (const address of blocked6) await assert.rejects(assertPublicUrl(`https://[${address}]/`), undefined, address);
+  for (const address of ['2001:db7::1', '2001:db9::1']) {
+    assert.ok(await assertPublicUrl(`https://[${address}]/`));
+  }
+
+  const server = http.createServer((_req, res) => res.end('should not be reached'));
+  let sockets = 0;
+  server.on('connection', () => { sockets++; });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const address of ['127.0.0.1', '198.51.100.9', '203.0.113.9', '2001:DB8::1', '2001:0db8:0000:0000:0000:0000:0000:0001', '::ffff:198.51.100.9']) {
+      await assert.rejects(fetchText('https://blocked-answer.test/path', {
+        resolve: async () => [{ address: '93.184.216.34', family: 4 }, { address, family: address.includes(':') ? 6 : 4 }],
+      }), /not a public address/);
+    }
+    assert.equal(sockets, 0, 'rejected DNS answers never reach the socket layer');
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
 test('HTTPS requests retain default TLS hostname verification, and redirects revalidate private destinations', async () => {
@@ -1134,15 +1226,19 @@ test('ids that keep failing cannot starve later ids across runs, and no id is re
   const { root, out } = project();
   try {
     const targets = [{ name: 'lodash', version: '4.17.15' }];
+    const now = Date.now();
     for (const id of ids.slice(0, 300)) fake.state.failIds.add(id); // the whole first page fails persistently
-    const first = await advisoriesFor({ out, targets, online: true });
+    const first = await advisoriesFor({ out, targets, online: true, now });
     assert.equal(fake.state.seen.length, 300);
     assert.equal(new Set(fake.state.seen).size, 300, 'no duplicate detail requests in a run');
     assert.equal(first.unresolved, 305);
+    assert.deepEqual(new Set(Object.keys(loadCache(out).deferred)), new Set(ids.slice(300)), 'the five IDs beyond the first cap are deferred');
     fake.state.seen.length = 0;
-    const second = await advisoriesFor({ out, targets, online: true });
-    assert.deepEqual(fake.state.seen.slice(0, 5), ids.slice(300), 'the unattempted ids go first on the next run');
+    const second = await advisoriesFor({ out, targets, online: true, now });
+    assert.equal(fake.state.seen.length, 300);
+    assert.deepEqual(new Set(fake.state.seen), new Set([...ids.slice(0, 295), ...ids.slice(300)]), 'deferred IDs go first, then failed IDs rotate by oldest attempt and ID tie');
     assert.equal(new Set(fake.state.seen).size, fake.state.seen.length);
+    assert.deepEqual(new Set(Object.keys(loadCache(out).deferred)), new Set(ids.slice(295, 300)), 'the five excluded failed IDs remain deferred');
     assert.equal(second.unresolved, 300, 'the later ids resolved although the first page keeps failing');
     assert.ok(loadCache(out).vulns[ids[304]]);
   } finally { await fake.close(); rm(root); }
@@ -1155,16 +1251,21 @@ test('missing and expired advisory details share one queue under the 300-item ca
   try {
     const targets = [{ name: 'lodash', version: '4.17.15' }];
     const cache = loadCache(out);
-    cache.osv['lodash@4.17.15'] = { ids, at: Date.now() };
-    for (const id of ids.slice(0, 305)) cache.vulns[id] = { id, aliases: [], summary: 'old', severity: 'LOW', score: 1, malware: false, withdrawn: false, fixed: {}, at: Date.now() - 8 * 24 * 36e5 };
+    const now = Date.now();
+    cache.osv['lodash@4.17.15'] = { ids: [...ids].reverse(), at: now };
+    for (const id of ids.slice(0, 305)) cache.vulns[id] = { id, aliases: [], summary: 'old', severity: 'LOW', score: 1, malware: false, withdrawn: false, fixed: {}, at: now - 8 * 24 * 36e5 };
     saveCache(out, cache);
-    await advisoriesFor({ out, targets, online: true });
+    await advisoriesFor({ out, targets, online: true, now });
     assert.equal(fake.state.seen.length, 300);
-    assert.deepEqual(fake.state.seen, ids.slice(305, 605), 'first run takes the never-attempted ids');
+    assert.equal(new Set(fake.state.seen).size, 300, 'first run requests each detail once');
+    assert.deepEqual(new Set(fake.state.seen), new Set(ids.slice(305, 605)), 'first run selects the never-attempted ids regardless of request arrival order');
+    const firstCache = loadCache(out);
+    assert.deepEqual(new Set(Object.keys(firstCache.deferred)), new Set([...ids.slice(0, 305), ...ids.slice(605)]), 'all IDs beyond the cap are marked deferred');
     fake.state.seen.length = 0;
-    await advisoriesFor({ out, targets, online: true });
+    await advisoriesFor({ out, targets, online: true, now });
     assert.equal(fake.state.seen.length, 300);
-    assert.deepEqual(fake.state.seen, [...ids.slice(605), ...ids.slice(0, 295)], 'one queue: the never-attempted ids first, then the oldest expired records, so cached ids are not starved');
+    assert.equal(new Set(fake.state.seen).size, 300, 'second run requests each detail once');
+    assert.deepEqual(new Set(fake.state.seen), new Set([...ids.slice(605), ...ids.slice(0, 295)]), 'the queue rotates through the remaining never-attempted IDs, then the oldest expired IDs');
   } finally { await fake.close(); rm(root); }
 });
 
@@ -1345,14 +1446,16 @@ test('one combined detail queue: persistent failures on missing ids cannot starv
     const r2 = await advisoriesFor({ out, targets, online: true });
     assert.equal(fake.state.seen.length, 300);
     assert.equal(new Set(fake.state.seen).size, 300, 'no duplicate requests in a run');
-    assert.deepEqual(new Set(fake.state.seen.slice(0, 20)), new Set(cachedIds), 'cached ids get their turn ahead of the ids that just failed');
+    assert.deepEqual(new Set(fake.state.seen), new Set([...cachedIds, ...missingIds.slice(0, 280)]), 'selected request set contains all expired cached details plus the first 280 failed ids');
+    assert.deepEqual(new Set(Object.keys(loadCache(out).deferred)), new Set(missingIds.slice(280)), 'the 20 excluded failures are deterministically marked deferred');
     assert.equal(r2.pendingDetails + r2.failedDetails, 0, 'every cached record refreshed');
     const skipped = missingIds.filter((id) => !fake.state.seen.includes(id));
     assert.equal(skipped.length, 20);
 
     fake.state.seen.length = 0;
     await advisoriesFor({ out, targets, online: true });
-    assert.deepEqual(new Set(fake.state.seen.slice(0, 20)), new Set(skipped), 'ids the last run did not reach go first');
+    assert.deepEqual(new Set(fake.state.seen), new Set(missingIds), 'all missing ids remain in the retry queue regardless of concurrent arrival order');
+    assert.deepEqual(loadCache(out).deferred, {}, 'the full retry batch fits under the cap');
     assert.equal(new Set(fake.state.seen).size, fake.state.seen.length);
   } finally { await fake.close(); rm(root); }
 });
@@ -1371,7 +1474,7 @@ test('registry: more than 300 targets are finished across runs and reported as d
     assert.equal(first.byKey.size, 300);
     fake.state.npmSeen.length = 0;
     const second = await registryFor({ out, targets, online: true });
-    assert.deepEqual(fake.state.npmSeen, npmUrls(targets.slice(300)), 'only the five unattempted targets are requested');
+    assert.deepEqual(new Set(fake.state.npmSeen), new Set(npmUrls(targets.slice(300))), 'only the five deferred targets are requested');
     assert.equal(second.deferred, 0);
     assert.equal(second.byKey.size, 305);
   } finally { await fake.close(); rm(root); }
@@ -1386,21 +1489,26 @@ test('registry: a persistently failing target rotates behind later targets, and 
     const first = await registryFor({ out, targets, online: true });
     assert.equal(first.failed, 1);
     assert.equal(first.deferred, 5);
+    assert.deepEqual(new Set(Object.keys(loadCache(out).npmDeferred)), new Set(targets.slice(300).map((t) => `${t.name}@${t.version}`)), 'the five unattempted targets retain deferred markers');
+    assert.ok(loadCache(out).npmTried['pkg0000@1.0.0'], 'the failed target has a retry marker');
     assert.match(first.error, /registry pkg0000/);
     fake.state.npmSeen.length = 0;
     const second = await registryFor({ out, targets, online: true });
     assert.equal(fake.state.npmSeen.length, 6, 'the five unattempted targets plus the failing one');
-    assert.deepEqual(fake.state.npmSeen.slice(0, 5), npmUrls(targets.slice(300)), 'unattempted targets go before the retry of the failure');
+    assert.deepEqual(new Set(fake.state.npmSeen), new Set([...npmUrls(targets.slice(300)), '/pkg0000/1.0.0']), 'the selected requests include the five previously deferred targets and the failed retry');
     assert.equal(new Set(fake.state.npmSeen).size, 6, 'no duplicate requests');
     assert.equal(second.byKey.size, 304, 'later targets succeeded although the first keeps failing');
     assert.equal(second.failed, 1);
     assert.equal(second.deferred, 0);
+    assert.deepEqual(loadCache(out).npmDeferred, {}, 'every deferred target was attempted');
     fake.state.npmSeen.length = 0;
     const offline = await registryFor({ out, targets, online: false });
     assert.equal(fake.state.npmSeen.length, 0, 'offline makes no request');
     assert.equal(offline.failed, 1, 'the failure is still reported offline');
     fake.state.failNpm.clear();
+    fake.state.npmSeen.length = 0;
     const third = await registryFor({ out, targets, online: true });
+    assert.deepEqual(new Set(fake.state.npmSeen), new Set(['/pkg0000/1.0.0']), 'the failed target retries alone and succeeds');
     assert.equal(third.failed, 0);
     assert.equal(third.byKey.size, 305);
   } finally { await fake.close(); rm(root); }
@@ -1423,7 +1531,7 @@ test('registry: --refresh persists capped fresh targets, which stay partial offl
     assert.equal(offline.deferred, 5, 'deferred markers keep offline coverage partial');
     fake.state.npmSeen.length = 0;
     const r2 = await registryFor({ out, targets, online: true });
-    assert.deepEqual(fake.state.npmSeen, npmUrls(targets.slice(300)), 'normal online run retries only the five capped targets');
+    assert.deepEqual(new Set(fake.state.npmSeen), new Set(npmUrls(targets.slice(300))), 'normal online run retries only the five capped targets');
     assert.equal(r2.deferred, 0);
     assert.equal(r2.failed, 0);
     assert.equal(r2.byKey.size, 305);
@@ -1458,7 +1566,7 @@ test('deps list and brief keep a capped registry refresh partial offline, then c
 
     fake.state.npmSeen.length = 0;
     const recovered = await runDeps({ root, out, store, memory, config, args: {}, allowOnline: true });
-    assert.deepEqual(fake.state.npmSeen, npmUrls(targets.slice(300)), 'ordinary online list run only retries the remaining five');
+    assert.deepEqual(new Set(fake.state.npmSeen), new Set(npmUrls(targets.slice(300))), 'ordinary online list run only retries the remaining five');
     assert.doesNotMatch(recovered, /deferred by the 300-item per-run cap/);
     assert.equal(loadCache(out).summary.complete, true);
     assert.match(depsSummary(out, store), /checked/);
@@ -1485,7 +1593,7 @@ test('registry: a deferred refresh failure is distinct, preserves cached metadat
     fake.state.failNpm.clear();
     fake.state.npmSeen.length = 0;
     const recovered = await registryFor({ out, targets, online: true });
-    assert.deepEqual(fake.state.npmSeen, ['/pkg0304/1.0.0']);
+    assert.deepEqual(new Set(fake.state.npmSeen), new Set(['/pkg0304/1.0.0']));
     assert.equal(recovered.failed, 0);
     assert.equal(recovered.deferred, 0);
     assert.equal(loadCache(out).npmTried['pkg0304@1.0.0'], undefined);
@@ -1552,22 +1660,22 @@ test('--refresh refetches fresh details under the 300 cap and continues fairly',
   const { root, out } = project();
   try {
     const targets = [{ name: 'lodash', version: '4.17.15' }];
-    await advisoriesFor({ out, targets, online: true });
-    await advisoriesFor({ out, targets, online: true });
+    await advisoriesFor({ out, targets, online: true, now: 1_000 });
+    await advisoriesFor({ out, targets, online: true, now: 1_001 });
     assert.equal(fake.hits.vuln, 305);
-    await advisoriesFor({ out, targets, online: true });
+    await advisoriesFor({ out, targets, online: true, now: 1_002 });
     assert.equal(fake.hits.vuln, 305, 'fresh details are reused without refresh');
     fake.state.seen.length = 0;
-    const r = await advisoriesFor({ out, targets, online: true, force: true });
+    const r = await advisoriesFor({ out, targets, online: true, force: true, now: 2_000 });
     assert.equal(fake.hits.osv, 2, 'the package lookup is repeated under force');
     assert.equal(fake.state.seen.length, 300, 'capped at 300 per run');
     assert.equal(new Set(fake.state.seen).size, 300);
     assert.equal(r.staleDetails, 5, 'the five not yet refreshed are reported stale');
     fake.state.seen.length = 0;
-    const r2 = await advisoriesFor({ out, targets, online: true, force: true });
+    const r2 = await advisoriesFor({ out, targets, online: true, force: true, now: 2_001 });
     assert.equal(fake.state.seen.length, 300);
     assert.equal(r2.staleDetails, 5);
-    assert.equal(fake.state.seen.slice(0, 5).sort().join(), ids.slice(300).concat().sort().join(), 'the five left over go first on the next forced run');
+    assert.deepEqual(new Set(fake.state.seen), new Set([...ids.slice(300), ...ids.slice(0, 295)]), 'the five oldest unrefreshed details are selected first by cache timestamps');
   } finally { await fake.close(); rm(root); }
 });
 

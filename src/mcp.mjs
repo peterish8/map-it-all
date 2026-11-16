@@ -6,16 +6,17 @@
 // The map rebuilds itself when HEAD or the working tree changed. Nothing leaves the machine.
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { renderBrief, readFilesList } from './brief.mjs';
 import { buildMap, diff, isFresh, outDirFor } from './build.mjs';
+import { acquireBuildLock, addAfterRelease, releaseBuildLock } from './build-lock.mjs';
 import { loadConfig } from './config.mjs';
 import { PKG_ROOT, createContext } from './context.mjs';
 import { runDeps, versionOfFrom } from './deps.mjs';
 import { hookInstalled } from './init.mjs';
 import { createMemory, formatHandoff, formatNote } from './memory.mjs';
-import { lockHeld, setEnabled, status as realtimeStatus, waitForLock } from './realtime.mjs';
+import { handoffQueuedWork, setEnabled, status as realtimeStatus } from './realtime.mjs';
 import { findRecords, flagsOf, formatConnections, loadStore, mermaid, resolveTarget, LEAD_FLAGS } from './store.mjs';
 
 const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version;
@@ -40,24 +41,30 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
   const config = loadConfig(root);
   const out = outOverride ? path.resolve(outOverride) : outDirFor(root, config);
   const memDir = config.memoryDir ? path.resolve(root, config.memoryDir) : path.join(out, 'memory');
-  const memory = createMemory({ root, dir: memDir, versionOf: versionOfFrom(() => (existsSync(path.join(out, 'stamp.json')) ? store() : null)) });
-  let cache = null;
+  let activeStore = null;
+  const memory = createMemory({ root, dir: memDir, versionOf: versionOfFrom(() => activeStore) });
   let building = null;
 
-  async function ensureFresh({ force = false, withKnip = false } = {}) {
-    // A realtime worker may be rebuilding right now: wait for it instead of racing it.
-    if (lockHeld(out)) await waitForLock(out);
-    if (!force && isFresh(root, out)) return false;
-    building ??= buildMap({ root, out, withKnip }).finally(() => { building = null; });
-    await building;
-    cache = null;
-    return true;
-  }
-
-  function store() {
-    const mtime = statSync(path.join(out, 'stamp.json')).mtimeMs;
-    if (!cache || cache.mtime !== mtime) cache = { mtime, store: loadStore(out) };
-    return cache.store;
+  async function withFreshMap({ force = false, withKnip = false } = {}) {
+    building ??= (async () => {
+      // Acquire the same lock used by realtime and ordinary builds, then check freshness while
+      // owning it. Never continue after a bounded probe or a failed wait without the lock.
+      const owner = await acquireBuildLock(out);
+      try {
+        if (force || !isFresh(root, out)) await buildMap({ root, out, withKnip, buildLock: owner });
+        const snapshot = {
+          store: loadStore(out),
+          files: readFilesList(out),
+          stamp: readFileSync(path.join(out, 'stamp.json'), 'utf8'),
+          diff: diff(out),
+          graphExists: existsSync(path.join(out, 'graph.html')),
+        };
+        activeStore = snapshot.store;
+        addAfterRelease(owner, () => handoffQueuedWork({ root, out }));
+        return snapshot;
+      } finally { await releaseBuildLock(owner); }
+    })().finally(() => { building = null; });
+    return building;
   }
 
   const clip = (text) => (text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}\n… output clipped; narrow the query or lower limit` : text);
@@ -75,8 +82,8 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
       description: 'Start-of-session briefing in a few hundred tokens: git state, stack, layout, most-imported files, public surface, cleanup leads, last handoff, memory notes. Call this first instead of exploring the repo.',
       inputSchema: { type: 'object', properties: {} },
       async run() {
-        await ensureFresh();
-        return renderBrief({ root, store: store(), memory, files: readFilesList(out), hidden: config.historyDirs });
+        const snapshot = await withFreshMap();
+        return renderBrief({ root, store: snapshot.store, memory, files: snapshot.files, hidden: config.historyDirs });
       },
     },
     {
@@ -91,15 +98,15 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
         },
       },
-      async run(a) { await ensureFresh(); return findRecords(store(), a); },
+      async run(a) { const snapshot = await withFreshMap(); return findRecords(snapshot.store, a); },
     },
     {
       name: 'file',
       description: 'Everything known about one file: its records (flags, refs), who imports it, what it imports, debt markers. Accepts a path, a unique path suffix or a record id.',
       inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       async run(a) {
-        await ensureFresh();
-        const s = store();
+        const snapshot = await withFreshMap();
+        const s = snapshot.store;
         const t = resolveOrExplain(s, a.path);
         if (t.error) return t.error;
         const recs = s.byPath.get(t.path) ?? [];
@@ -138,8 +145,8 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
         required: ['target'],
       },
       async run(a) {
-        await ensureFresh();
-        const s = store();
+        const snapshot = await withFreshMap();
+        const s = snapshot.store;
         const t = resolveOrExplain(s, a.target);
         if (t.error) return t.error;
         const opts = { direction: a.direction ?? 'both', depth: a.depth ?? 1, max: a.max ?? 60, recordId: t.record?.id };
@@ -159,9 +166,9 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
         },
       },
       async run(a) {
-        await ensureFresh();
+        const snapshot = await withFreshMap();
         const limit = a.limit ?? 40;
-        const hits = store().records.filter((r) => (a.kind ? r.kind === a.kind : r.kind !== 'debt' && r.kind !== 'knip')
+        const hits = snapshot.store.records.filter((r) => (a.kind ? r.kind === a.kind : r.kind !== 'debt' && r.kind !== 'knip')
           && (a.flag ? r.flags.includes(a.flag) : r.flags.some((f) => LEAD_FLAGS.has(f)))
           && (a.public === undefined || Boolean(r.public) === a.public) && (a.include_history || !r.history));
         const by = new Map();
@@ -204,7 +211,7 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
       name: 'diff',
       description: 'What this session newly orphaned: records that lost their last production reference since the session-start snapshot, removed records, new surface nothing uses. Needs the snapshot taken at session start.',
       inputSchema: { type: 'object', properties: {} },
-      async run() { await ensureFresh(); return diff(out); },
+      async run() { const snapshot = await withFreshMap(); return snapshot.diff; },
     },
     {
       name: 'deps',
@@ -219,7 +226,11 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
           limit: { type: 'integer', minimum: 1, maximum: 50, default: 15 },
         },
       },
-      async run(a) { await ensureFresh(); return runDeps({ root, out, store: store(), memory, config, args: a, allowOnline }); },
+      async run(a) {
+        const snapshot = await withFreshMap();
+        const snapshotMemory = createMemory({ root, dir: memDir, versionOf: versionOfFrom(() => snapshot.store) });
+        return runDeps({ root, out, store: snapshot.store, memory: snapshotMemory, config, args: a, allowOnline });
+      },
     },
     {
       name: 'memory',
@@ -238,6 +249,7 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
         required: ['action'],
       },
       async run(a) {
+        await withFreshMap(); // note freshness is derived from the published map snapshot
         switch (a.action) {
           case 'remember': { const n = memory.remember(a); return `${n.replaced ? 'updated' : 'saved'} ${n.id} (${n.status}${n.anchors.length ? `, anchored to ${n.anchors.length} file(s)` : ', no anchors: it cannot be flagged stale'})`; }
           case 'recall': { const list = memory.recall({ query: a.query, kind: a.kind, tag: a.tags?.[0], limit: a.limit }); return list.length ? list.map(formatNote).join('\n\n') : 'No matching notes.'; }
@@ -271,7 +283,7 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
       async run(a) {
         const action = a.action ?? 'status';
         if (action === 'on' || action === 'off') setEnabled(out, action === 'on');
-        const s = realtimeStatus(out);
+        const s = await realtimeStatus(out);
         return `realtime ${s.enabled ? 'ON' : 'OFF'}${s.rebuilding ? ' (rebuilding now)' : ''}${s.enabled && !hookInstalled(root) ? '. The edit hook is not installed in this project, so nothing triggers it yet: run `map-it-all init --hook`.' : ''}`;
       },
     },
@@ -280,8 +292,8 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
       description: 'Force a rebuild of the map now. with_knip also runs Knip if the project has it installed (slow) and adds unused file/export candidates.',
       inputSchema: { type: 'object', properties: { with_knip: { type: 'boolean', default: false } } },
       async run(a) {
-        const { stamp } = await buildMap({ root, out, withKnip: Boolean(a.with_knip) });
-        cache = null;
+        const snapshot = await withFreshMap({ force: true, withKnip: Boolean(a.with_knip) });
+        const stamp = JSON.parse(snapshot.stamp);
         return `rebuilt in ${stamp.ms} ms: ${Object.entries(stamp.counts).map(([k, v]) => `${k} ${v}`).join(', ')}${stamp.errors.length ? `\nproblems: ${stamp.errors.map((e) => `${e.extractor}: ${e.message}`).join('; ')}` : ''}`;
       },
     },
@@ -290,9 +302,9 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
       description: 'Path of the interactive zoomable treemap (graph.html) for the user. open:true launches it in their browser.',
       inputSchema: { type: 'object', properties: { open: { type: 'boolean', default: false } } },
       async run(a) {
-        await ensureFresh();
         const file = path.join(out, 'graph.html');
-        if (!existsSync(file)) return 'graph.html missing; call refresh.';
+        const snapshot = await withFreshMap();
+        if (!snapshot.graphExists) return 'graph.html missing; call refresh.';
         if (a.open) {
           const [bin, argv] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', file]] : [process.platform === 'darwin' ? 'open' : 'xdg-open', [file]];
           spawn(bin, argv, { detached: true, stdio: 'ignore' }).unref();

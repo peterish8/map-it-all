@@ -17,7 +17,7 @@ import { runWorker, setEnabled, status as realtimeStatus } from './realtime.mjs'
 import { findRecords, loadStore } from './store.mjs';
 import { renderView } from './view.mjs';
 
-const VALUE_FLAGS = ['root', 'out', 'kind', 'flag', 'limit', 'agent', 'profile', 'direction', 'depth', 'docs', 'only'];
+const VALUE_FLAGS = ['root', 'out', 'kind', 'flag', 'limit', 'agent', 'profile', 'direction', 'depth', 'docs', 'only', 'worker-ready'];
 
 function parse(argv) {
   const opts = { _: [], flags: {} };
@@ -143,12 +143,12 @@ export async function main(argv) {
       const action = rest[0] ?? 'status';
       if (action !== 'on' && action !== 'off' && action !== 'status') { console.error(commandHelp('realtime')); process.exit(2); }
       if (action !== 'status') setEnabled(out, action === 'on');
-      const s = realtimeStatus(out);
+      const s = await realtimeStatus(out);
       console.log(`realtime: ${s.enabled ? 'ON' : 'OFF'}${s.rebuilding ? '  (a background rebuild is running)' : ''}`);
       if (s.enabled && !hookInstalled(root)) console.log('note: the edit hook is not installed in this project, so nothing triggers it yet. Run: map-it-all init --hook');
       break;
     }
-    case 'rebuild-worker': await runWorker({ root, out, debounceMs: Number(process.env.MAP_IT_ALL_DEBOUNCE_MS) || 1500 }); break;
+    case 'rebuild-worker': await runWorker({ root, out, debounceMs: Number(process.env.MAP_IT_ALL_DEBOUNCE_MS) || 1500, lockWait: true, readyFile: flags['worker-ready'] === true ? undefined : flags['worker-ready'] }); break;
     case 'doctor': { const r = doctor(root); console.log(r.text); if (!r.ok) process.exit(1); break; }
     case 'build': {
       log(`map-it-all: ${root}`);

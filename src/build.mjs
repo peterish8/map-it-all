@@ -7,6 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { loadConfig } from './config.mjs';
 import { createContext, fingerprint } from './context.mjs';
 import { createResolver, scanImports } from './imports.mjs';
+import { withBuildLock } from './build-lock.mjs';
 import { LEAD_FLAGS, loadStore } from './store.mjs';
 import { renderView } from './view.mjs';
 
@@ -29,7 +30,7 @@ function jsonRecords(header, records) {
 }
 
 /** Build the map. `write: false` keeps everything in memory (used by `check`). */
-export async function buildMap({ root, out, withKnip = false, write = true, log = () => {} } = {}) {
+async function buildMapUnlocked({ root, out, withKnip = false, write = true, log = () => {} } = {}) {
   const t0 = performance.now();
   root = path.resolve(root);
   const config = loadConfig(root);
@@ -111,6 +112,20 @@ export async function buildMap({ root, out, withKnip = false, write = true, log 
   }
   ctx.dispose();
   return { stamp, results, files: ctx.files, root, out };
+}
+
+export async function buildMap(options = {}) {
+  const root = path.resolve(options.root);
+  const config = loadConfig(root);
+  const out = options.out ? path.resolve(options.out) : outDirFor(root, config);
+  if (options.write === false) return buildMapUnlocked({ ...options, root, out });
+  const handoff = !options.buildLock || options.buildLockHandoff;
+  return withBuildLock(out, () => buildMapUnlocked({ ...options, root, out }), options.buildLock, handoff ? async () => {
+    // A realtime edit may have arrived while this ordinary CLI/init/MCP build owned the lock.
+    // Recheck only after release so its worker can acquire the same lock and drain the queue.
+    const { handoffQueuedWork } = await import('./realtime.mjs');
+    await handoffQueuedWork({ root, out });
+  } : undefined);
 }
 
 /** Cross-check ast-grep against plain regexes so a rule that stops matching is loud. */

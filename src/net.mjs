@@ -32,8 +32,8 @@ export const clean = (s, max = 200) => String(s ?? '').replace(/[\x00-\x1f\x7f]/
 function privateAddress(ip) {
   const kind = net.isIP(ip);
   if (kind === 4) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168 || b === 0)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19 || b === 51)) || (a === 203 && b === 0);
+    const [a, b, c] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && ((b === 0 && (c === 0 || c === 2)) || b === 168)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) || (a === 203 && b === 0 && c === 113);
   }
   if (kind === 6) {
     const l = ip.toLowerCase();
@@ -45,11 +45,18 @@ function privateAddress(ip) {
       if (parts.length === 2 && parts.every((p) => /^[\da-f]{1,4}$/i.test(p))) return privateAddress(`${parseInt(parts[0], 16) >> 8}.${parseInt(parts[0], 16) & 255}.${parseInt(parts[1], 16) >> 8}.${parseInt(parts[1], 16) & 255}`);
       return true;
     }
-    // Only global unicast 2000::/3 is accepted; reject protocol assignments, 6to4 and documentation ranges.
-    const [first, second] = l.split(':');
-    const firstWord = parseInt(first || '0', 16);
-    const secondWord = parseInt(second || '0', 16);
-    return firstWord < 0x2000 || firstWord >= 0x4000 || (firstWord === 0x2001 && secondWord <= 0x01ff) || l.startsWith('2001:db8:') || l.startsWith('2002:') || l.startsWith('3fff:');
+    // net.isIP validates syntax; expand compression and embedded IPv4 before testing CIDR prefixes.
+    const words = l.split('::');
+    const parseSide = (side) => side ? side.split(':').flatMap((part) => {
+      if (!part.includes('.')) return [parseInt(part, 16)];
+      const octets = part.split('.').map(Number);
+      return [(octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]];
+    }) : [];
+    const left = parseSide(words[0]);
+    const right = words.length === 2 ? parseSide(words[1]) : [];
+    const expanded = words.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill(0), ...right] : left;
+    const [firstWord, secondWord] = expanded;
+    return firstWord < 0x2000 || firstWord >= 0x4000 || (firstWord === 0x2001 && (secondWord <= 0x01ff || secondWord === 0x0db8)) || l.startsWith('2002:') || firstWord === 0x3fff;
   }
   return true; // not an address we understand: fail closed
 }

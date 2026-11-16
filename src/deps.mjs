@@ -11,6 +11,7 @@ import { MAX_NEW_VULNS, MAX_REGISTRY, SEVERITY_ORDER, advisoriesFor, fixedIn, ha
 import { docsFor } from './docs.mjs';
 import { loadLocks } from './lock.mjs';
 import { networkPolicy } from './net.mjs';
+import { registryEligible } from './extractors/deps.mjs';
 
 const SECTIONS = ['dependencies', 'optionalDependencies', 'devDependencies', 'peerDependencies'];
 const rank = (s) => SEVERITY_ORDER.indexOf(s);
@@ -19,7 +20,8 @@ const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m 
 const depRecords = (store) => store.records.filter((r) => r.kind === 'dependency');
 
 /** Every installed copy reachable from a direct dependency, with the direct dependencies that pull it in. */
-function reachable(root, records) {
+function reachable(root, records, workspaceNames = []) {
+  const workspaces = new Set(workspaceNames);
   const dirs = new Set();
   const manifests = new Map(); // file -> json
   for (const r of records) for (const d of r.declarations ?? r.declaredIn.map((entry) => {
@@ -41,10 +43,14 @@ function reachable(root, records) {
     const found = locks.for(dir);
     for (const section of SECTIONS) {
       for (const [name, range] of Object.entries(json[section] ?? {})) {
+        if (!registryEligible(name, range, workspaces)) continue;
+        const lock = found?.lock;
+        const start = lock?.direct(found.relDir, name, String(range));
+        // Yarn Classic does not install unsatisfied peers. They are eligible when present in the lock,
+        // but an absent peer is not an unresolved registry install.
+        if (section === 'peerDependencies' && lock?.kind === 'yarn' && !start) continue;
         eligibleDeclarations++;
-        if (!found) continue;
-        const lock = found.lock;
-        const start = lock.direct(found.relDir, name, String(range));
+        if (!lock) continue;
         if (!start) continue;
         if (!lock.info(start).version) continue;
         resolvedDeclarations++;
@@ -107,7 +113,7 @@ export async function runDeps({ root, out, store, memory, config, args = {}, all
 
   if (args.package) return packageDetail({ root, out, store, memory, records, args, policy });
 
-  const { via, installed, lockfiles, eligibleDeclarations, resolvedDeclarations, pnpmDirectEntries } = reachable(root, records);
+  const { via, installed, lockfiles, eligibleDeclarations, resolvedDeclarations, pnpmDirectEntries } = reachable(root, records, store.stamp.stats?.depsWorkspaceNames ?? []);
   const prod = records.filter((r) => !r.dev).length;
   const lines = [`Dependencies: ${records.length} direct (${prod} prod, ${records.length - prod} dev), ${installed || 'no'} installed copies in ${lockfiles.join(', ') || 'no lockfile'}`];
 

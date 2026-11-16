@@ -11,7 +11,8 @@ import { loadLocks } from '../lock.mjs';
 import { escapeRe, finalize, lineAt, ref } from '../records.mjs';
 
 const SECTIONS = ['dependencies', 'optionalDependencies', 'devDependencies', 'peerDependencies'];
-const NOT_FROM_REGISTRY = /^(workspace|file|link|portal|patch|git\+|git:|github:|https?:)/;
+export const NOT_FROM_REGISTRY = /^(workspace|file|link|portal|patch|git\+|git:|github:|https?:)/;
+export const registryEligible = (name, range, workspaceNames) => !workspaceNames.has(name) && !NOT_FROM_REGISTRY.test(String(range));
 // Config-ish files where a package can be used without any import (plugins, presets, loaders).
 const CONFIG_FILE = /(^|\/)([\w.-]*\.config\.[cm]?[jt]s|\.[\w-]*rc(\.[\w]+)?|(babel|eslint|prettier|postcss|tailwind|jest|vitest|next|metro|app)[\w.-]*\.(json|js|cjs|mjs|ts))$/;
 
@@ -40,7 +41,7 @@ export function extract(ctx, externals = new Map()) {
   for (const m of manifests) {
     for (const section of SECTIONS) {
       for (const [name, range] of Object.entries(m.json[section] ?? {})) {
-        if (workspaceNames.has(name) || NOT_FROM_REGISTRY.test(String(range))) continue;
+        if (!registryEligible(name, range, workspaceNames)) continue;
         if (!byName.has(name)) byName.set(name, { name, declared: [] });
         byName.get(name).declared.push({ file: m.file, dir: m.dir, section, range: String(range) });
       }
@@ -105,7 +106,7 @@ export function extract(ctx, externals = new Map()) {
   for (const f of [...seenLocks].sort()) { try { sig.update(`${f}:`).update(readFileSync(path.join(ctx.root, f))); } catch { sig.update(`${f}:gone;`); } }
   return {
     records,
-    stats: { depsDirect: records.length, depsLocks: seenLocks.size, depsLockSig: seenLocks.size ? sig.digest('hex').slice(0, 12) : null, depsFingerprint: dependencyFingerprint.digest('hex') },
+    stats: { depsDirect: records.length, depsLocks: seenLocks.size, depsLockSig: seenLocks.size ? sig.digest('hex').slice(0, 12) : null, depsFingerprint: dependencyFingerprint.digest('hex'), depsWorkspaceNames: [...workspaceNames] },
     notes: records.some((r) => !r.version) && !seenLocks.size ? ['no lockfile found next to package.json: dependency versions are unknown, so advisories cannot be checked'] : [],
   };
 }

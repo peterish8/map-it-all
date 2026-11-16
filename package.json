@@ -49,6 +49,7 @@
     "ast-grep"
   ],
   "dependencies": {
-    "@ast-grep/cli": "^0.51.2"
+    "@ast-grep/cli": "^0.51.2",
+    "os-lock": "^2.0.0"
   }
 }
