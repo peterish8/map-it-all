@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildMap } from '../src/build.mjs';
-import { acquireBuildLock, buildLockHeld, releaseBuildLock } from '../src/build-lock.mjs';
+import { acquireBuildLock, acquireNamedLock, buildLockHeld, releaseBuildLock } from '../src/build-lock.mjs';
 import { createServer } from '../src/mcp.mjs';
 import { handleEdit, handoffQueuedWork, isEnabled, lockHeld, runWorker, scheduleRebuild, setEnabled, status, waitForLock } from '../src/realtime.mjs';
 import { loadStore } from '../src/store.mjs';
@@ -125,7 +125,7 @@ test('an edit refreshes the map in the background, then the next edit hears what
     assert.ok(hookMs < 500, `the hook returns quickly (${Math.round(hookMs)} ms)`);
     assert.ok(existsSync(path.join(out, 'pending.json')) || readdirSync(out).some((name) => name.startsWith('pending.claim.')), 'the change was durably queued or claimed by the worker');
 
-    await settle(out);
+    await settle(out, root);
     assert.equal(loadStore(out).byId.get('convex:lib.used').prodRefCount, 0, 'the worker rebuilt the map');
     assert.equal((await status(out)).undeliveredNotes, 1);
 
@@ -141,7 +141,7 @@ test('an edit refreshes the map in the background, then the next edit hears what
 
     // Editing the same file again must not repeat the same warning.
     assert.equal(await handleEdit(edit(root, 'convex/lib.ts'), { bin: BIN }), '', 'no repeat');
-    await settle(out);
+    await settle(out, root);
   } catch (error) { primaryError = error; throw error; }
   finally { await cleanup(root, out, primaryError); }
 });
@@ -490,18 +490,24 @@ test('a touch immediately after release is caught by the post-release handoff an
 test('same-millisecond touches have distinct generations', async () => {
   const { root, out } = await project();
   try {
+    const worker = await acquireNamedLock(out, 'worker.lock');
     const held = await acquireBuildLock(out);
     const now = Date.now;
     Date.now = () => 123456;
     try {
-      assert.equal(await scheduleRebuild({ root, out, bin: BIN }), 'started');
+      assert.equal(await scheduleRebuild({ root, out, bin: BIN }), 'running');
       const first = JSON.parse(readFileSync(path.join(out, 'pending.json'), 'utf8'));
       assert.equal(await scheduleRebuild({ root, out, bin: BIN }), 'running');
       const second = JSON.parse(readFileSync(path.join(out, 'pending.json'), 'utf8'));
       assert.equal(first.at, second.at);
       assert.notEqual(first.generation, second.generation);
-    } finally { Date.now = now; await releaseBuildLock(held); }
-  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
+    } finally {
+      Date.now = now;
+      try { unlinkSync(path.join(out, 'pending.json')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await releaseBuildLock(held);
+      await releaseBuildLock(worker);
+    }
+  } finally { await cleanup(root, out); }
 });
 
 test('failed builds restore their claimed work and clear the claim marker', async () => {
@@ -556,7 +562,7 @@ test('`touch` as a real process: valid output or silence, always exit 0, even on
     assert.equal(r.status, 0);
     if (r.stdout) assert.equal(JSON.parse(r.stdout).hookSpecificOutput.hookEventName, 'PostToolUse');
     assert.ok(ms < 1500, `a cold-start hook call stays fast (${Math.round(ms)} ms)`);
-    await settle(out);
+    await settle(out, root);
   } catch (error) { primaryError = error; throw error; }
   finally { await cleanup(root, out, primaryError); }
 });
