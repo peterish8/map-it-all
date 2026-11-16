@@ -10,7 +10,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Realtime mode** (off by default): `realtime on|off|status` on the CLI and as an MCP `realtime` tool, so an agent can toggle it. A `PostToolUse` edit hook (`touch`) schedules one coalesced, low-priority background rebuild per burst of edits and tells the agent, once and briefly, about public records, heavily imported files and newly orphaned records. No watcher or daemon.
 - `init --hook` installs the SessionStart brief and the realtime edit hook, preserving your own hooks.
 
+- **Dependencies** (`deps` tool and CLI command, `docs` command): every declared package is a map record joined to the files that import it, with versions from `package-lock.json`, `yarn.lock` (classic) or `pnpm-lock.yaml`. With online lookups enabled by the user (`--online`, `"network": true` or `MAP_IT_ALL_ONLINE=1`; an agent cannot enable them), advisories from OSV.dev and deprecations from the npm registry are traced from transitive packages back to your direct dependencies and the files that import them, cached by name and version. `docs` saves a version-pinned excerpt (`llms.txt`, else the GitHub README) as a memory note that flags itself stale when the version changes (new `pins` on memory notes). The session brief gets one dependency line from the cache. Unused production dependencies are listed as leads. Details in [docs/deps.md](docs/deps.md).
+- `init --online` saves `"network": true` in `map-it-all.config.json` (plain `init` stays offline), and `doctor` shows the effective network policy and the age of the advisory cache.
+
 ### Changed
+- The `standard` and `full` MCP profiles add the `deps` tool (about 1,490 and 1,610 tokens of definitions). The network is now "off by default" instead of "never".
 - Faster builds: a 2,500-file monorepo went from about 11 s to about 4 to 5 s. Backtracking path regexes were replaced by linear tokenisation, npm-script references are found in one pass, and each file is stat'ed once.
 - Map files are written atomically (stamp last) and readers wait for a build in progress, so a tool call never sees a half-written map.
 - The MCP `standard` and `full` profiles include the `realtime` tool (about 1,270 and 1,400 tokens of definitions).

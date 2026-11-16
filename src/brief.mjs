@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { git } from './context.mjs';
+import { depsSummary } from './deps.mjs';
 import { LEAD_FLAGS } from './store.mjs';
 import { formatHandoff } from './memory.mjs';
 
@@ -67,6 +68,8 @@ export function renderBrief({ root, store, memory, files, hidden = [], showGit =
   if (broken.length) lines.push('', `!! MAP INCOMPLETE: ${broken.map((e) => `${e.extractor} failed (${e.message.slice(0, 120)})`).join('; ')}. Run \`map-it-all doctor\`. Do not trust absences in this brief.`);
 
   lines.push('', `Stack: ${packLine(store)}`);
+  const dependencies = depsSummary(store.out, store);
+  if (dependencies) lines.push(dependencies);
   const product = (files ?? []).filter((f) => !hidden.some((d) => f === d || f.startsWith(`${d.replace(/\/+$/, '')}/`)));
   if (product.length) lines.push('Layout:', ...layout(product).map((l) => `  ${l}`));
 

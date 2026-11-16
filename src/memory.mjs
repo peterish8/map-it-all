@@ -32,9 +32,21 @@ function writeAtomic(file, data) {
 
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 
-export function createMemory({ root, dir }) {
+/**
+ * `versionOf(pkg)` lets a note be pinned to a dependency version (a docs excerpt is only true for the
+ * version it was read for). It returns the installed versions, null when the package is gone, or
+ * undefined when it cannot tell (no map yet): then the pin is simply not checked.
+ */
+export function createMemory({ root, dir, versionOf }) {
   const notesDir = path.join(dir, 'notes');
   const handoffFile = path.join(dir, 'handoff.json');
+
+  const pinStates = (pins = []) => pins.flatMap((p) => {
+    const now = versionOf?.(p.pkg);
+    if (now === undefined) return [];
+    if (!now?.length) return [{ path: p.pkg, state: 'missing', detail: `${p.pkg} is no longer a dependency` }];
+    return now.includes(p.version) ? [] : [{ path: p.pkg, state: 'changed', detail: `${p.pkg} is now ${now.join(', ')}; this note was written for ${p.version}` }];
+  });
 
   const anchorState = (anchors) => anchors.map((a) => {
     const now = hashFile(root, a.path);
@@ -54,14 +66,14 @@ export function createMemory({ root, dir }) {
   }
 
   const view = (note) => {
-    const states = anchorState(note.anchors);
+    const states = [...anchorState(note.anchors), ...pinStates(note.pins)];
     return { ...note, status: statusOf(states), anchorStates: states.filter((s) => s.state !== 'ok') };
   };
 
   return {
     dir,
 
-    remember({ title, body, kind = 'fact', tags = [], anchors = [] }) {
+    remember({ title, body, kind = 'fact', tags = [], anchors = [], pins = [] }) {
       if (!title?.trim() || !body?.trim()) throw new Error('title and body are required');
       if (!KINDS.includes(kind)) throw new Error(`kind must be one of: ${KINDS.join(', ')}`);
       if (body.length > MAX_BODY) throw new Error(`body is ${body.length} chars; keep notes under ${MAX_BODY}. Split it or link a file.`);
@@ -70,7 +82,7 @@ export function createMemory({ root, dir }) {
       const note = {
         id: existing?.id ?? `${slug(title)}-${createHash('sha1').update(title + now).digest('hex').slice(0, 5)}`,
         title: title.trim().slice(0, MAX_TITLE), body: body.trim(), kind, tags: [...new Set(tags.map((t) => t.toLowerCase()))],
-        anchors: toAnchors(anchors), head: git(root, ['rev-parse', '--short', 'HEAD'])?.trim() ?? null,
+        anchors: toAnchors(anchors), pins: pins.filter((p) => p?.pkg && p?.version).map((p) => ({ pkg: String(p.pkg), version: String(p.version) })), head: git(root, ['rev-parse', '--short', 'HEAD'])?.trim() ?? null,
         created: existing?.created ?? now, updated: now,
       };
       writeAtomic(path.join(notesDir, `${note.id}.json`), note);
@@ -110,6 +122,7 @@ export function createMemory({ root, dir }) {
       const note = readJson(file);
       if (!note) return null;
       note.anchors = toAnchors(note.anchors.filter((a) => hashFile(root, a.path) !== null).map((a) => a.path));
+      note.pins = (note.pins ?? []).map((p) => { const now = versionOf?.(p.pkg); return now?.length ? { pkg: p.pkg, version: now[0] } : p; });
       note.updated = new Date().toISOString();
       note.head = git(root, ['rev-parse', '--short', 'HEAD'])?.trim() ?? null;
       writeAtomic(file, note);
@@ -150,7 +163,7 @@ export function formatNote(n) {
   const head = `${n.id}  [${n.kind}] ${n.status.toUpperCase()}${n.tags.length ? `  #${n.tags.join(' #')}` : ''}`;
   const lines = [head, `  ${n.title}`, `  ${n.body.replaceAll('\n', '\n  ')}`];
   if (n.anchors.length) lines.push(`  anchors: ${n.anchors.map((a) => a.path).join(', ')}`);
-  for (const s of n.anchorStates) lines.push(`  ! ${s.path} ${s.state === 'missing' ? 'no longer exists' : 'changed since this note was written'}: verify before relying on it`);
+  for (const s of n.anchorStates) lines.push(`  ! ${s.detail ?? `${s.path} ${s.state === 'missing' ? 'no longer exists' : 'changed since this note was written'}`}: verify before relying on it`);
   return lines.join('\n');
 }
 

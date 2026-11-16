@@ -9,7 +9,7 @@ if (process.argv[2] === 'touch') {
   let input = {};
   try { input = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { /* not hook JSON */ }
   const { handleEdit } = await import('../src/realtime.mjs');
-  const out = handleEdit(input, { bin: fileURLToPath(import.meta.url) });
+  const out = await handleEdit(input, { bin: fileURLToPath(import.meta.url) });
   if (out) process.stdout.write(out);
   process.exit(0);
 } else {

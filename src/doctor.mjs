@@ -3,7 +3,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { cacheAge } from './advisories.mjs';
 import { outDirFor, isFresh } from './build.mjs';
+import { networkPolicy } from './net.mjs';
 import { loadConfig } from './config.mjs';
 import { git, PKG_ROOT } from './context.mjs';
 
@@ -19,7 +21,7 @@ const RTK_INSTALL = {
   linux: 'brew install rtk   (or: curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh)',
 };
 
-export function doctor(root) {
+export function doctor(root, { env = process.env, now = Date.now() } = {}) {
   root = path.resolve(root);
   const config = loadConfig(root);
   const out = outDirFor(root, config);
@@ -46,6 +48,14 @@ export function doctor(root) {
   add(gi.split('\n').some((l) => l.trim().replace(/^\//, '').startsWith(config.out)) ? 'ok' : 'warn', '.gitignore', gi.includes(config.out) ? `${config.out}/ is ignored` : `add ${config.out}/ to .gitignore (the map and memory are local); \`init --write\` does it`);
 
   add(existsSync(path.join(out, 'stamp.json')) ? (isFresh(root, out) ? 'ok' : 'info') : 'info', 'Map', existsSync(path.join(out, 'stamp.json')) ? (isFresh(root, out) ? `fresh in ${config.out}/` : 'present but the tree changed since: it rebuilds on next use') : 'not built yet: run `map-it-all build`');
+
+  const policy = networkPolicy({ config, env });
+  const source = env.MAP_IT_ALL_OFFLINE === '1' ? 'forced off by MAP_IT_ALL_OFFLINE=1' : config.network === true ? 'on: "network": true in the config' : env.MAP_IT_ALL_ONLINE === '1' ? 'on: MAP_IT_ALL_ONLINE=1' : 'off by default (allow with --online or "network": true)';
+  add(policy.allowed ? 'warn' : 'ok', 'Network policy', `${source}. OSV receives package/version queries and advisory IDs in detail URLs; npm and docs hosts receive requested URLs, remote IP, and ordinary HTTP/TLS metadata (including user-agent).`);
+  const age = cacheAge(out, now);
+  const h = (ms) => Math.floor(ms / 36e5);
+  const state = age.stale === 0 ? 'fresh (all under 24 h)' : age.stale === age.count ? 'stale (24 h or older; refreshed on the next online run)' : `mixed: ${age.stale} of ${age.count} entries are 24 h or older and refresh on the next online run`;
+  add('info', 'Advisory cache', !age.exists ? 'none yet: `deps --online` creates it' : age.at === null ? 'present but empty' : `newest ${h(age.ageMs)} h old, oldest ${h(age.oldestAgeMs)} h old, ${state}`);
 
   const rtk = run('rtk', ['--version']);
   if (rtk) add('ok', 'RTK (command-output compression)', `${rtk}. Savings so far: \`rtk gain\`. Hook into your agent once with \`rtk init -g\`, then restart it.`);

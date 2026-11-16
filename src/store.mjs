@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { isTestPath } from './context.mjs';
 
-const SKIP = new Set(['stamp.json', 'imports.json', 'files.json', 'handoff.json']);
+const SKIP = new Set(['stamp.json', 'imports.json', 'files.json', 'handoff.json', 'deps-cache.json']);
 
 /** Flags that make a record a cleanup lead (the rest explain or inform). */
 export const LEAD_FLAGS = new Set([

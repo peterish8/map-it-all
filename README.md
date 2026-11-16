@@ -7,8 +7,8 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Node 20 or newer" src="https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-8A2BE2">
-  <img alt="One runtime dependency" src="https://img.shields.io/badge/runtime%20deps-1-brightgreen">
-  <img alt="Local only, no network" src="https://img.shields.io/badge/network-none-lightgrey">
+  <img alt="Two runtime dependencies" src="https://img.shields.io/badge/runtime%20deps-2-brightgreen">
+  <img alt="Network off by default" src="https://img.shields.io/badge/network-off%20by%20default-lightgrey">
 </p>
 
 <p align="center">
@@ -40,7 +40,7 @@ Solo developers working with coding agents keep hitting the same walls:
 | Agents add code instead of changing it, break parts they cannot see, lose the plot in a large repo | [Columbia DAPLab's 9 failure patterns of coding agents](https://daplab.cs.columbia.edu/general/2026/01/08/9-critical-failure-patterns-of-coding-agents.html) (repeated code, codebase awareness, refactoring) | `connections` shows the blast radius before the edit; `find` and `symbol` find the helper that already exists |
 | Every new session re-explains the project and burns input tokens | A constant complaint in developer threads; context files drift out of date | `brief` at session start, `handoff` at session end |
 | Memory goes stale as the code changes | [STALE: can LLM agents know when their memories are outdated?](https://arxiv.org/abs/2605.06527), [Dosu on pruning stale agent memory](https://dosu.dev/articles/prune-stale-agent-memory) | Notes carry file hashes; `recall` flags `stale` and `orphaned` notes |
-| Too many MCP tools cost tokens on every request and make tool choice worse | [MCP tool overload](https://dev.to/thedailyagent/mcp-tool-overload-why-more-tools-make-your-agent-worse-5a49) reports ~42,000 tokens of definitions for GitHub's official server | 4 to 12 tools in three profiles: **~670 / ~1,270 / ~1,400 tokens** (measured, `map-it-all tokens`) |
+| Too many MCP tools cost tokens on every request and make tool choice worse | [MCP tool overload](https://dev.to/thedailyagent/mcp-tool-overload-why-more-tools-make-your-agent-worse-5a49) reports ~42,000 tokens of definitions for GitHub's official server | 4 to 13 tools in three profiles: **~668 / ~1,487 / ~1,611 tokens** (estimates; run `node bin/map-it-all.mjs tokens`) |
 | Dead code piles up, docs describe deleted files | [Developers report](https://news.ycombinator.com/item?id=48770319) that agents add and rarely delete | `leads`, `diff`, and a docs-drift check |
 | Shell output floods the context | [RTK](https://github.com/rtk-ai/rtk) | `doctor` detects it and prints the setup ([docs/rtk.md](docs/rtk.md)) |
 
@@ -52,7 +52,7 @@ Solo developers working with coding agents keep hitting the same walls:
 - **Cleanup leads with the right amount of fear.** No references, test-only references, unmounted routes, unregistered native modules, tests no runner executes, docs pointing at deleted files. Anything an installed client or external caller could still reach is marked `public`: **VERIFY, never REMOVE**.
 - **A session diff.** "What did this session just orphan?" in one call.
 - **A zoomable map you can open** (the picture above).
-- **Local and cheap.** No network, no API keys, no telemetry. One runtime dependency, [ast-grep](https://ast-grep.github.io). Works with any MCP client: Claude Code, Cursor, VS Code, Codex.
+- **Local and cheap.** No API keys, no telemetry, and the network is off unless you turn it on. OSV receives package/version queries and advisory IDs in detail URLs; npm and docs hosts receive their requested URLs, remote IP and ordinary HTTP/TLS metadata, including the user-agent. Network metadata may reveal package or repository names. Two runtime dependencies: [ast-grep](https://ast-grep.github.io) for code structure and `fs-ext-extra-prebuilt` for cross-process file locks. Works with any MCP client: Claude Code, Cursor, VS Code, Codex.
 
 It does **not** replace a language server or a call-graph tool. For exact, type-aware call graphs, run one next to it (graft, [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp), Serena, CodeGraph). MAP-IT-ALL covers what those do not: registration and liveness facts, session memory and the brief. See the [comparison](#how-it-compares).
 
@@ -266,7 +266,7 @@ npx -y github:peterish8/map-it-all uninstall --purge   # also delete .map-it-all
 
 ```bash
 git clone https://github.com/peterish8/map-it-all.git
-cd map-it-all && npm install            # installs ast-grep, the only dependency
+cd map-it-all && npm install            # installs ast-grep and the native file-lock helper
 ```
 
 Then, from your project folder, call the script by its path:
@@ -376,7 +376,7 @@ args = ["-y", "github:peterish8/map-it-all", "mcp", "--root", "/absolute/path/to
 ```
 </details>
 
-By default the server maps the directory the client starts it in. Use `--root <dir>` or `MAP_IT_ALL_ROOT` to point elsewhere. Add `--profile minimal` to expose four tools (about 670 tokens of definitions) instead of ten. More in [docs/agents.md](docs/agents.md).
+By default the server maps the directory the client starts it in. Use `--root <dir>` or `MAP_IT_ALL_ROOT` to point elsewhere. Add `--profile minimal` to expose four tools (about 668 estimated tokens of definitions) instead of eleven. More in [docs/agents.md](docs/agents.md).
 
 `init` writes these three lines to the end of your `CLAUDE.md` / `AGENTS.md` for you ([snippet](examples/CLAUDE.md.snippet) if you prefer to paste them):
 
@@ -464,12 +464,13 @@ health-route-stays-above-the-routers-3fdf2  [decision] STALE
 | `leads` | What looks unused or broken, and what needs VERIFY? |
 | `symbol` | Where is this name declared and mentioned? (name-based, not type-aware) |
 | `diff` | What did this session newly orphan? |
+| `deps` | Which files import each package, which installed versions are vulnerable or deprecated and which of my files they expose, what is possibly unused. `package` + `docs` saves a version-pinned docs note. Online lookups only if you enabled them. |
 | `memory` | `remember`, `recall`, `confirm`, `forget`, `list`: notes anchored to files |
 | `handoff` | `save` at the end, `read` at the start |
 | `realtime` | Turn the [realtime refresh](#realtime-mode) on, off, or read its status |
 | `refresh`, `view` | Rebuild now (optionally with Knip); path of the zoomable map |
 
-Profiles (`--profile`): `minimal` is brief, find, connections, memory; `standard` (default) adds file, leads, symbol, diff, handoff, realtime; `full` adds refresh and view. Every tool is also a CLI command, so the terminal and the agent always agree.
+Profiles (`--profile`): `minimal` is brief, find, connections, memory; `standard` (default) adds file, leads, symbol, diff, deps, handoff, realtime; `full` adds refresh and view. Every tool is also a CLI command, so the terminal and the agent always agree.
 
 ## CLI
 
@@ -491,6 +492,29 @@ map-it-all mcp [--profile minimal|standard|full]
 ```
 
 `map-it-all <command> --help` for one command. Run `map-it-all tokens` to see what the MCP tool definitions cost on your install.
+
+## Dependencies
+
+`map-it-all deps` (and the `deps` MCP tool) ties your dependencies to your code: which files import each package, and, if you allow online lookups, which installed versions have known vulnerabilities or are deprecated, **and which of your files are exposed** (a vulnerable transitive package is traced back to the direct dependency that pulls it in, and from there to the files that import it).
+
+```text
+$ map-it-all deps --online
+Dependencies: 38 direct (27 prod, 11 dev), 612 installed copies in package-lock.json
+Advisories: 2 vulnerable package version(s), 1 deprecated direct dependency version(s); checked 3 min ago
+
+CRITICAL inner@1.0.0  [via lodash]
+  GHSA-bbbb: Remote code execution
+  exposed in 2 file(s): src/a.ts:1, src/b.ts:1
+```
+
+- **Offline by default.** The build only records versions (from `package-lock.json`, `yarn.lock` classic or `pnpm-lock.yaml`) and who imports what. Advisories and deprecations come from [OSV.dev](https://osv.dev) and the npm registry, only when **you** allow it: `--online` for one run, `"network": true` in `map-it-all.config.json`, or `MAP_IT_ALL_ONLINE=1`. An agent cannot switch it on; `MAP_IT_ALL_OFFLINE=1` forces it off.
+- **What is sent:** OSV receives package/version query bodies and advisory IDs in detail URL paths. npm and docs hosts receive requested URLs, your remote IP, and ordinary HTTP/TLS metadata including the user-agent; that metadata may reveal package or repository names. The application payloads (bodies and URLs) carry only package names and versions, advisory ids and the docs addresses the registry returned: no source, file paths or account details. Network-level visibility is separate: remote services and the network path still see your IP, the host names, timing and the user-agent. Answers are cached in `.map-it-all/deps-cache.json`: while entries are fresh (24 hours for advisory lookups, 7 days for details and registry data), an unchanged lockfile costs no requests. One lookup can mean several requests.
+- **Docs notes:** `map-it-all docs <package> "how do I debounce"` prints the same package view as `deps <package>` (versions, importers, advisories, deprecation, OSV credit when advisories appear) and then the saved note: a short excerpt from the package's `llms.txt`, else its GitHub README. Online, that means OSV and registry requests as well as the docs requests. Selection uses shallow question-term/token matching, not semantic answering. The source is current at fetch time; compatibility with the installed package version is unverified. The version pin is only a local invalidation anchor, so a version change marks the note stale but does not verify source compatibility. `memory list` reads the saved map without rebuilding it, so it shows that staleness only after a command that rebuilds the map (`build`, `deps`, `docs`, or the session hook).
+- **CLI output:** the complete command prints package details plus advisory findings and the OSV/credit block when applicable; the abbreviated example above shows only the summary shape.
+- Remote text is treated as untrusted: cleaned, size-capped, and docs links may only reach public https hosts. Advisory data: OSV.dev (GitHub Advisory Database, CC BY 4.0).
+- `map-it-all init --online` saves the opt-in as `"network": true`; plain `init` stays offline. `map-it-all doctor` shows the effective network policy and the age of the advisory cache.
+
+Full details (precedence, what is sent, caches, partial results, supported lockfiles and attribution limits, docs sources): [docs/deps.md](docs/deps.md).
 
 ## What gets mapped
 
@@ -545,6 +569,7 @@ Zero config works. To override detection, add `map-it-all.config.json` at the re
   "historyDirs": [".planning", "archive"],
   "ignore": ["**/vendor/**"],
   "driftIgnore": ["^\\.mcp\\.json$"],
+  "network": false,
   "convex": { "dir": "convex" },
   "express": { "appFiles": ["server/app.ts"] },
   "expo": { "dir": "apps/mobile" }
@@ -561,7 +586,7 @@ Zero config works. To override detection, add `map-it-all.config.json` at the re
 | Memory is tied to code | Yes, by file hash; flags stale | Not their focus | Not by file hash, typically | No |
 | Marks what shipped clients may still call (VERIFY, not REMOVE) | Yes (`public`) | Not their focus | Not their focus | No |
 | Needs a model, vector store or API key | No | No | Typically yes | No |
-| Tool-definition cost | ~670 to ~1,400 tokens | Varies by server | Varies | n/a (CLI hook) |
+| Tool-definition cost | ~668 to ~1,611 estimated tokens | Varies by server | Varies | n/a (CLI hook) |
 
 They are complements: run a call-graph server for exact call graphs, MAP-IT-ALL for the brief, registration facts and memory, RTK for shell output.
 
@@ -569,7 +594,7 @@ They are complements: run a call-graph server for exact call graphs, MAP-IT-ALL 
 
 <details>
 <summary><b>Does it send my code anywhere?</b></summary>
-No. It makes no network requests and has no telemetry. It reads your project folder, runs <code>git</code> and ast-grep locally, and writes to <code>.map-it-all/</code>. See <a href="SECURITY.md">SECURITY.md</a>.
+No. By default it makes no network requests and has no telemetry. It reads your project folder, runs <code>git</code> and ast-grep locally, and writes to <code>.map-it-all/</code>. The opt-in <a href="#dependencies">dependency lookups</a> send package/version queries and advisory IDs to OSV, plus requested URLs and ordinary connection metadata to npm and docs hosts; that metadata may reveal package or repository names. See <a href="SECURITY.md">SECURITY.md</a>.
 </details>
 
 <details>
@@ -623,7 +648,7 @@ Issues and pull requests are welcome, especially **a wrong or missing result wit
 
 ```bash
 git clone https://github.com/peterish8/map-it-all.git && cd map-it-all
-npm install && npm test       # 33 tests: packs, import resolution, memory, MCP protocol, CLI, init, realtime
+npm install && npm test       # node:test suite: packs, import resolution, memory, MCP, CLI, docs, dependencies, init and realtime
 ```
 
 ## Acknowledgements

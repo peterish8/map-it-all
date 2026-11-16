@@ -2,7 +2,7 @@
 // Kotlin classes. Static import graphs cannot see manifest entries or native registration.
 
 import path from 'node:path';
-import { finalize, ref } from '../records.mjs';
+import { finalize, lineAt, ref } from '../records.mjs';
 
 export const name = 'expo';
 
@@ -25,7 +25,81 @@ export function detect(ctx) {
 export function extract(ctx, { dir }) {
   const prefix = dir ? `${dir}/` : '';
   const tokens = ctx.tokenIndex((f) => f.startsWith(prefix));
-  return { records: [...screens(ctx, tokens, prefix), ...nativeModules(ctx, prefix), ...kotlinClasses(ctx, tokens, prefix)] };
+  const routes = routeReferences(ctx, prefix);
+  return { records: [...screens(ctx, tokens, prefix, routes), ...components(ctx, tokens, prefix, routes), ...nativeModules(ctx, prefix), ...kotlinClasses(ctx, tokens, prefix)] };
+}
+
+// Mask comments and strings so apparent calls inside either are not treated as executable code.
+function codeMask(text) {
+  return text.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|(?:'[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*"|`[^`\\]*(?:\\.[^`\\]*)*`)/g,
+    (s) => s.replace(/[^\n]/g, ' '));
+}
+
+function routeReferences(ctx, prefix) {
+  const registrations = [];
+  const files = ctx.codeFiles.filter((f) => f.startsWith(prefix));
+  for (const f of files) {
+    const text = ctx.read(f);
+    const mask = codeMask(text);
+    for (const tag of text.matchAll(/<[\w$.]+\.Screen\b[^>]*>/g)) {
+      if (mask[tag.index] !== '<') continue;
+      const name = /\bname\s*=\s*(['"])([^'"]+)\1/.exec(tag[0])?.[2];
+      const component = /\bcomponent\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(tag[0])?.[1];
+      if (!name || !component) continue;
+      // Require a direct relative import, including named aliases, to avoid joining unrelated
+      // components with the same name. A same-file component is also valid.
+      let target = f;
+      const imports = /\bimport\s+([^;\n]+?)\s+from\s*(['"])([^'"]+)\2/g;
+      for (const imp of text.matchAll(imports)) {
+        if (!imp[3].startsWith('.') || !new RegExp(`\\b${component}\\b`).test(imp[1])) continue;
+        const base = path.posix.normalize(path.posix.join(path.posix.dirname(f), imp[3]));
+        target = files.find((candidate) => candidate === base || /\.(tsx?|jsx?)$/.test(candidate) && candidate.replace(/\.(tsx?|jsx?)$/, '') === base) ?? '';
+        break;
+      }
+      if (target) registrations.push({ name, target, path: f, line: lineAt(text, tag.index) });
+    }
+  }
+  const byTarget = new Map();
+  for (const registration of registrations) {
+    if (!byTarget.has(registration.target)) byTarget.set(registration.target, []);
+    byTarget.get(registration.target).push(ref(registration.path, registration.line, 'navigator'));
+  }
+  for (const f of files) {
+    const text = ctx.read(f);
+    const mask = codeMask(text);
+    for (const call of text.matchAll(/\b(?:navigation|[A-Za-z_$][\w$]*Navigation)\s*\.\s*navigate\s*\(\s*(['"])([^'"]+)\1/g)) {
+      if (mask[call.index] === ' ') continue;
+      for (const target of new Set(registrations.filter((r) => r.name === call[2]).map((r) => r.target))) {
+        byTarget.get(target).push(ref(f, lineAt(text, call.index), 'navigator'));
+      }
+    }
+  }
+  for (const [target, refs] of byTarget) {
+    const seen = new Set();
+    byTarget.set(target, refs.filter((r) => {
+      const key = `${r.path}:${r.line}:${r.how}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }));
+  }
+  return byTarget;
+}
+
+function components(ctx, tokens, prefix, routes) {
+  const out = [];
+  for (const f of ctx.codeFiles) {
+    if (!f.startsWith(prefix) || !/(^|\/)components\//.test(f) || !/\.(tsx|jsx)$/.test(f) || ctx.isTest(f)) continue;
+    const name = path.posix.basename(f).replace(/\.(tsx|jsx)$/, '');
+    if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) continue;
+    const text = ctx.read(f);
+    const exported = new RegExp(`\\bexport\\s+(?:(?:default\\s+)?(?:function|class)\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b|default\\s+${name}\\b|\\{[^}]*\\b${name}\\b[^}]*\\})`);
+    if (!exported.test(text)) continue;
+    const refs = [...(routes.get(f) ?? []), ...tokenRefs(ctx, tokens, name, f, () => 'import')];
+    out.push(finalize({ id: `mobile-component:${f}#${name}`, kind: 'mobile-component', name, path: f,
+      line: lineAt(text, text.search(exported)), public: false, registered: routes.has(f), refs, flags: [] }, ctx));
+  }
+  return out;
 }
 
 function tokenRefs(ctx, tokens, name, own, howFor) {
@@ -34,13 +108,15 @@ function tokenRefs(ctx, tokens, name, own, howFor) {
   return refs;
 }
 
-function screens(ctx, tokens, prefix) {
+function screens(ctx, tokens, prefix, routes) {
   const out = [];
   for (const f of ctx.files) {
     if (!f.startsWith(prefix) || !/\/screens\//.test(f) || !/\.tsx?$/.test(f) || ctx.isTest(f)) continue;
     const name = path.posix.basename(f).replace(/\.tsx?$/, '');
     if (name === 'index') continue;
-    const refs = tokenRefs(ctx, tokens, name, f, (g) => (/\/navigation\/|Navigator/.test(g) ? 'navigator' : 'import'));
+    const routeRefs = routes.get(f) ?? [];
+    const refs = [...routeRefs, ...tokenRefs(ctx, tokens, name, f, (g) => (/\/navigation\/|Navigator/.test(g) ? 'navigator' : 'import'))
+      .filter((r) => r.how !== 'navigator' || !routeRefs.some((route) => route.path === r.path))];
     out.push(finalize({
       id: `mobile-screen:${name}`, kind: 'mobile-screen', name, path: f, line: 1, public: false,
       registered: refs.some((r) => r.how === 'navigator'), refs, flags: [],

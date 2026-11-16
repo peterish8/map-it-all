@@ -1,16 +1,18 @@
 // Drives the real server process the way an MCP client does.
 import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { fixture } from './fixtures.mjs';
+import { fixture, write } from './fixtures.mjs';
 
 const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'map-it-all.mjs');
 
-function client(root, profile) {
-  const child = spawn(process.execPath, [BIN, 'mcp', '--root', root, ...(profile ? ['--profile', profile] : [])], { stdio: ['pipe', 'pipe', 'ignore'] });
+function client(root, profile, online = false) {
+  const child = spawn(process.execPath, [BIN, 'mcp', '--root', root, ...(profile ? ['--profile', profile] : []), ...(online ? ['--online'] : [])], { stdio: ['pipe', 'pipe', 'ignore'] });
   let buf = '';
   let n = 0;
   const waiting = new Map();
@@ -27,7 +29,7 @@ function client(root, profile) {
   });
   const call = (method, params) => new Promise((res) => { const id = ++n; waiting.set(id, res); child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`); });
   const tool = async (name, args = {}) => { const r = await call('tools/call', { name, arguments: args }); return { text: r.result?.content?.[0]?.text ?? '', isError: r.result?.isError, error: r.error }; };
-  return { call, tool, raw, child, close: () => { child.stdin.end(); } };
+  return { call, tool, raw, child, close: () => new Promise((resolve) => { if (child.exitCode !== null) return resolve(); child.once('close', resolve); child.stdin.end(); }) };
 }
 
 test('MCP server: handshake, profiles, tools, memory round trip, errors', async () => {
@@ -40,7 +42,7 @@ test('MCP server: handshake, profiles, tools, memory round trip, errors', async 
     c.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
 
     const list = (await c.call('tools/list', {})).result.tools.map((t) => t.name);
-    assert.deepEqual(list, ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'memory', 'handoff', 'realtime'], 'standard profile');
+    assert.deepEqual(list, ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'deps', 'memory', 'handoff', 'realtime'], 'standard profile');
     assert.match((await c.tool('realtime')).text, /realtime OFF/, 'off until you turn it on');
     assert.match((await c.tool('realtime', { action: 'on' })).text, /realtime ON.*edit hook is not installed/s, 'it tells you when nothing can trigger it');
     assert.match((await c.tool('realtime', { action: 'off' })).text, /realtime OFF/);
@@ -78,7 +80,7 @@ test('MCP server: handshake, profiles, tools, memory round trip, errors', async 
     assert.equal((await c.call('bogus/method', {})).error.code, -32601);
 
     for (const line of c.raw) JSON.parse(line); // stdout carried only protocol messages
-  } finally { c.close(); rmSync(root, { recursive: true, force: true }); }
+  } finally { await c.close(); rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
 });
 
 test('MCP profiles control the tool surface', async () => {
@@ -89,5 +91,111 @@ test('MCP profiles control the tool surface', async () => {
     const tools = (await c.call('tools/list', {})).result.tools;
     assert.deepEqual(tools.map((t) => t.name), ['brief', 'find', 'connections', 'memory']);
     assert.ok(JSON.stringify(tools).length / 4 < 1000, 'minimal profile stays under about 1000 tokens');
-  } finally { c.close(); rmSync(root, { recursive: true, force: true }); }
+  } finally { await c.close(); rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
+});
+
+test('MCP deps respects offline policy, refresh, explicit online, and the offline override', async () => {
+  const root = fixture();
+  const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+  pkg.dependencies = { lodash: '^4.17.15' };
+  write(root, 'package.json', JSON.stringify(pkg));
+  write(root, 'package-lock.json', JSON.stringify({ name: 'fx', lockfileVersion: 3, packages: {
+    '': { name: 'fx', dependencies: { lodash: '^4.17.15' } },
+    'node_modules/lodash': { version: '4.17.15' },
+  } }));
+  write(root, 'web/dep.ts', "import lodash from 'lodash';\nexport default lodash;\n");
+
+  const hits = { batch: 0, vuln: 0, npm: 0 };
+  let failBatch = false;
+  const vuln = JSON.parse(readFileSync(new URL('./fixtures/osv-lodash-ghsa-35jh-r3h4-6jhm.json', import.meta.url), 'utf8'));
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/v1/querybatch') {
+        hits.batch++;
+        if (failBatch) { res.statusCode = 500; res.end('{}'); return; }
+        const queries = JSON.parse(body).queries;
+        res.end(JSON.stringify({ results: queries.map((q) => q.package.name === 'lodash' ? { vulns: [{ id: vuln.id }] } : {}) }));
+      } else if (req.url === `/v1/vulns/${vuln.id}`) {
+        hits.vuln++;
+        res.end(JSON.stringify(vuln));
+      } else {
+        hits.npm++;
+        res.end(JSON.stringify({}));
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const prior = { osv: process.env.MAP_IT_ALL_OSV_URL, npm: process.env.MAP_IT_ALL_NPM_URL, offline: process.env.MAP_IT_ALL_OFFLINE };
+  process.env.MAP_IT_ALL_OSV_URL = base;
+  process.env.MAP_IT_ALL_NPM_URL = base;
+  try {
+    const c = client(root);
+    try {
+      const offline = await c.tool('deps');
+      assert.match(offline.text, /Network lookups are off/);
+      assert.deepEqual(hits, { batch: 0, vuln: 0, npm: 0 });
+      const refresh = await c.tool('deps', { refresh: true });
+      assert.match(refresh.text, /Network lookups are off/);
+      assert.deepEqual(hits, { batch: 0, vuln: 0, npm: 0 }, 'refresh cannot enable requests');
+    } finally { await c.close(); }
+
+    const online = client(root, undefined, true);
+    try {
+      const result = await online.tool('deps');
+      assert.match(result.text, /HIGH\s+lodash@4\.17\.15/);
+      assert.match(result.text, /exposed in 1 file\(s\): web\/dep\.ts/);
+      assert.deepEqual(hits, { batch: 1, vuln: 1, npm: 1 });
+    } finally { await online.close(); }
+
+    const cacheFile = path.join(root, '.map-it-all', 'deps-cache.json');
+    const cache = JSON.parse(readFileSync(cacheFile, 'utf8'));
+    cache.osv['lodash@4.17.15'].at -= 25 * 36e5;
+    writeFileSync(cacheFile, JSON.stringify(cache));
+    failBatch = true;
+    const failedRefresh = client(root, undefined, true);
+    try {
+      const result = await failedRefresh.tool('deps');
+      assert.doesNotMatch(result.text, /No known vulnerabilities/);
+      assert.match(result.text, /partial: .*package lookup\(s\) failed to refresh/);
+      assert.match(result.text, /OSV lookup failed/);
+    } finally { await failedRefresh.close(); }
+
+    const offlineAfterFailure = client(root);
+    try {
+      assert.match((await offlineAfterFailure.tool('brief')).text, /partially checked/);
+      const result = await offlineAfterFailure.tool('deps');
+      assert.match(result.text, /partial: .*package lookup\(s\) failed to refresh/);
+      assert.doesNotMatch(result.text, /No known vulnerabilities/);
+      assert.deepEqual(hits, { batch: 2, vuln: 1, npm: 1 }, 'the separate offline MCP process makes no requests');
+    } finally { await offlineAfterFailure.close(); }
+
+    failBatch = false;
+    const recovered = client(root, undefined, true);
+    try {
+      const result = await recovered.tool('deps');
+      assert.match(result.text, /HIGH\s+lodash@4\.17\.15/);
+      assert.doesNotMatch(result.text, /partial: .*package lookup\(s\) failed to refresh/);
+      assert.match((await recovered.tool('brief')).text, /checked/);
+      assert.equal(hits.batch, 3, 'the successful online invocation retries the stale item');
+    } finally { await recovered.close(); }
+
+    process.env.MAP_IT_ALL_OFFLINE = '1';
+    rmSync(path.join(root, '.map-it-all', 'deps-cache.json'), { force: true });
+    const forcedOffline = client(root, undefined, true);
+    try {
+      const result = await forcedOffline.tool('deps', { refresh: true });
+      assert.match(result.text, /MAP_IT_ALL_OFFLINE=1 is set/);
+      assert.deepEqual(hits, { batch: 3, vuln: 1, npm: 1 }, 'offline override wins even with --online and refresh');
+    } finally { await forcedOffline.close(); }
+  } finally {
+    for (const [key, value] of [['MAP_IT_ALL_OSV_URL', prior.osv], ['MAP_IT_ALL_NPM_URL', prior.npm], ['MAP_IT_ALL_OFFLINE', prior.offline]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 });
+  }
 });

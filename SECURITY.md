@@ -13,7 +13,8 @@ It is a local developer tool, and its footprint is deliberately small:
 - **Reads** the project folder you point it at (files tracked or untracked-but-not-ignored by git), and `package.json`, `tsconfig.json` and similar config.
 - **Writes** only inside the project's `.map-it-all/` folder (the map, memory notes, the handoff) and, if you ask (`init --write`), your MCP client config and `.gitignore`. It writes temporary ast-grep rule files to your OS temp folder and removes them.
 - **Runs** `git`, the bundled `ast-grep` binary, and (only for `build --with-knip`) your project's own `knip`. `view --open` and `demo --open` ask your OS to open an HTML file.
-- **Never** makes network requests, collects telemetry, or executes your project's code.
+- **Never** collects telemetry or executes your project's code.
+- Makes **no network requests by default**. The only network code is `src/net.mjs`, used by the opt-in `deps` and `docs` lookups. It runs only when the user enables it (`--online`, `"network": true`, or `MAP_IT_ALL_ONLINE=1`; an agent cannot enable it, and `MAP_IT_ALL_OFFLINE=1` forces it off). OSV receives package/version queries and advisory IDs in detail URL paths. npm and docs hosts receive requested URLs, the remote IP, and ordinary HTTP/TLS metadata, including the user-agent; network metadata may reveal package or repository names. Docs links come from package metadata, must resolve only to public HTTPS addresses, and are revalidated on redirects. Responses are size-capped, and remote text is cleaned and labelled untrusted.
 - The MCP server speaks JSON-RPC over stdio only. It opens no ports.
 
 ## Things to know

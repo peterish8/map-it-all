@@ -8,6 +8,7 @@ import { renderBrief, readFilesList } from './brief.mjs';
 import { buildMap, check, diff, isFresh, outDirFor, snapshot } from './build.mjs';
 import { loadConfig } from './config.mjs';
 import { PKG_ROOT } from './context.mjs';
+import { runDeps, versionOfFrom } from './deps.mjs';
 import { doctor } from './doctor.mjs';
 import { hookInstalled, runInit, runUninstall } from './init.mjs';
 import { createMemory, formatHandoff, formatNote } from './memory.mjs';
@@ -16,7 +17,7 @@ import { runWorker, setEnabled, status as realtimeStatus } from './realtime.mjs'
 import { findRecords, loadStore } from './store.mjs';
 import { renderView } from './view.mjs';
 
-const VALUE_FLAGS = ['root', 'out', 'kind', 'flag', 'limit', 'agent', 'profile', 'direction', 'depth', 'docs'];
+const VALUE_FLAGS = ['root', 'out', 'kind', 'flag', 'limit', 'agent', 'profile', 'direction', 'depth', 'docs', 'only', 'worker-ready'];
 
 function parse(argv) {
   const opts = { _: [], flags: {} };
@@ -35,7 +36,7 @@ const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'ut
 
 const COMMANDS = [
   ['demo', '[--open]', 'try it in 10 seconds on a bundled sample project (nothing in your repo is touched)'],
-  ['init', '[--agent claude|cursor|vscode|codex|all] [--npx] [--hook] [--dry-run]', 'set the project up: build the map, write the MCP config, add the block to CLAUDE.md and AGENTS.md'],
+  ['init', '[--agent claude|cursor|vscode|codex|all] [--npx] [--hook] [--online] [--dry-run]', 'set the project up: build the map, write the MCP config, add the block to CLAUDE.md and AGENTS.md (--online also allows dependency lookups permanently)'],
   ['uninstall', '[--purge]', 'undo init: remove the instruction blocks, MCP entries and hooks (--purge also deletes the local map and memory)'],
   ['realtime', '[on|off|status]', 'keep the map fresh while an agent edits (needs the hooks from `init --hook`); switch it any time'],
   ['touch', '(hook; reads Claude Code JSON on stdin)', 'after an agent edit: refresh the map in the background and warn about the edited file'],
@@ -48,6 +49,8 @@ const COMMANDS = [
   ['connections', '<file|record> [--direction in|out|both] [--depth n] [--mermaid]', 'blast radius: who depends on it, what it depends on, who calls it'],
   ['leads', '[--kind k] [--flag f] [--public] [--limit n]', 'cleanup candidates (leads, never proof)'],
   ['symbol', '<name>', 'where an identifier is declared and mentioned (name-based)'],
+  ['deps', '[package] [--only vulnerable|deprecated|unused] [--docs <question>] [--online] [--refresh]', 'dependencies tied to your code: importers, advisories and deprecations for installed versions (online lookups are opt-in)'],
+  ['docs', '<package> [question] [--online] [--refresh]', 'a short docs excerpt for the installed version, saved as a memory note that flags itself when the version changes'],
   ['diff', '', 'what this session newly orphaned'],
   ['check', '', "exit 1 if a pack's rules drifted from plain regex counts (for CI)"],
   ['session-start', '', 'rebuild if stale, snapshot, print the brief (a SessionStart hook)'],
@@ -114,6 +117,8 @@ export async function main(argv) {
     : path.resolve(flags.out === true || !flags.out ? outDirFor(root, config) : flags.out);
   const memDir = config.memoryDir ? path.resolve(root, config.memoryDir) : path.join(out, 'memory');
   const log = (m) => console.log(m);
+  let loaded;
+  const versionOf = versionOfFrom(() => (existsSync(path.join(out, 'stamp.json')) ? (loaded ??= loadStore(out)) : null));
 
   switch (cmd) {
     case 'help': console.log(commandHelp(rest[0])); break;
@@ -121,7 +126,7 @@ export async function main(argv) {
       // A bundled sample project, mapped into the OS temp folder: nothing in your repo is touched.
       rmSync(out, { recursive: true, force: true });
       const built = await buildMap({ root, out });
-      console.log(renderBrief({ root, store: loadStore(out), memory: createMemory({ root, dir: memDir }), files: readFilesList(out), hidden: config.historyDirs, showGit: false }));
+      console.log(renderBrief({ root, store: loadStore(out), memory: createMemory({ root, dir: memDir, versionOf }), files: readFilesList(out), hidden: config.historyDirs, showGit: false }));
       console.log(`\nDemo map built in ${built.stamp.ms} ms from ${path.relative(process.cwd(), root) || root}.\nZoomable map: ${path.join(out, 'graph.html')}\nTry it on your project: map-it-all init, then map-it-all build`);
       const broken = built.stamp.errors.filter((e) => !e.soft);
       if (broken.length) { console.error(`\ndemo map is incomplete:\n${broken.map((e) => `  ${e.extractor}: ${e.message}`).join('\n')}\nRun: map-it-all doctor`); process.exit(1); }
@@ -138,12 +143,12 @@ export async function main(argv) {
       const action = rest[0] ?? 'status';
       if (action !== 'on' && action !== 'off' && action !== 'status') { console.error(commandHelp('realtime')); process.exit(2); }
       if (action !== 'status') setEnabled(out, action === 'on');
-      const s = realtimeStatus(out);
+      const s = await realtimeStatus(out);
       console.log(`realtime: ${s.enabled ? 'ON' : 'OFF'}${s.rebuilding ? '  (a background rebuild is running)' : ''}`);
       if (s.enabled && !hookInstalled(root)) console.log('note: the edit hook is not installed in this project, so nothing triggers it yet. Run: map-it-all init --hook');
       break;
     }
-    case 'rebuild-worker': await runWorker({ root, out, debounceMs: Number(process.env.MAP_IT_ALL_DEBOUNCE_MS) || 1500 }); break;
+    case 'rebuild-worker': await runWorker({ root, out, debounceMs: Number(process.env.MAP_IT_ALL_DEBOUNCE_MS) || 1500, lockWait: true, readyFile: flags['worker-ready'] === true ? undefined : flags['worker-ready'] }); break;
     case 'doctor': { const r = doctor(root); console.log(r.text); if (!r.ok) process.exit(1); break; }
     case 'build': {
       log(`map-it-all: ${root}`);
@@ -168,13 +173,13 @@ export async function main(argv) {
     }
     case 'brief': {
       await ensure(root, out);
-      console.log(renderBrief({ root, store: loadStore(out), memory: createMemory({ root, dir: memDir }), files: readFilesList(out), hidden: config.historyDirs }));
+      console.log(renderBrief({ root, store: loadStore(out), memory: createMemory({ root, dir: memDir, versionOf }), files: readFilesList(out), hidden: config.historyDirs }));
       break;
     }
     case 'session-start': {
       await ensure(root, out);
       snapshot(out);
-      console.log(renderBrief({ root, store: loadStore(out), memory: createMemory({ root, dir: memDir }), files: readFilesList(out), hidden: config.historyDirs }));
+      console.log(renderBrief({ root, store: loadStore(out), memory: createMemory({ root, dir: memDir, versionOf }), files: readFilesList(out), hidden: config.historyDirs }));
       break;
     }
     case 'ensure': await ensure(root, out); log('map fresh'); break;
@@ -200,6 +205,16 @@ export async function main(argv) {
       console.log(await tool.run(Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined))));
       break;
     }
+    case 'deps': case 'docs': {
+      if (cmd === 'docs' && !rest.length) { console.error(commandHelp('docs')); process.exit(2); }
+      await ensure(root, out);
+      const str = (v) => (v === true ? undefined : v);
+      const args = cmd === 'docs'
+        ? { package: rest[0], docs: rest.slice(1).join(' '), refresh: flags.refresh ? true : undefined }
+        : { package: rest[0], docs: flags.docs === undefined ? undefined : flags.docs === true ? '' : flags.docs, only: str(flags.only), refresh: flags.refresh ? true : undefined, limit: flags.limit ? Number(flags.limit) : undefined };
+      console.log(await runDeps({ root, out, store: loadStore(out), memory: createMemory({ root, dir: memDir, versionOf }), config, args, allowOnline: Boolean(flags.online) }));
+      break;
+    }
     case 'check': {
       const { stamp } = await buildMap({ root, write: false });
       const problems = check(stamp);
@@ -208,7 +223,7 @@ export async function main(argv) {
       break;
     }
     case 'memory': {
-      const memory = createMemory({ root, dir: memDir });
+      const memory = createMemory({ root, dir: memDir, versionOf });
       const [sub = 'list', ...args] = rest;
       if (sub === 'list') { const l = memory.list(); console.log(l.length ? l.map((n) => `${n.id}  [${n.kind}] ${n.status}  ${n.title}`).join('\n') : 'No notes yet.'); }
       else if (sub === 'recall') { const l = memory.recall({ query: args.join(' ') }); console.log(l.length ? l.map(formatNote).join('\n\n') : 'No matching notes.'); }
@@ -216,9 +231,9 @@ export async function main(argv) {
       else console.log('usage: memory list | recall <query> | forget <id>');
       break;
     }
-    case 'handoff': console.log(formatHandoff(createMemory({ root, dir: memDir }).readHandoff())); break;
+    case 'handoff': console.log(formatHandoff(createMemory({ root, dir: memDir, versionOf }).readHandoff())); break;
     case 'tokens': console.log(tokens(root, out, config)); break;
-    case 'mcp': serveStdio({ root, profile: flags.profile === true ? 'standard' : flags.profile ?? 'standard', outOverride: flags.out === true ? undefined : flags.out }); return;
+    case 'mcp': serveStdio({ root, profile: flags.profile === true ? 'standard' : flags.profile ?? 'standard', outOverride: flags.out === true ? undefined : flags.out, allowOnline: Boolean(flags.online) }); return;
     default:
       console.error(`unknown command: ${cmd}\n\n${HELP}`);
       process.exit(2);
