@@ -1,9 +1,37 @@
 import { closeSync, existsSync, mkdirSync, openSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { lock as osLock, unlock as osUnlock } from 'os-lock';
+import { constants, flock, lockFileEx, unlockFileEx } from 'fs-ext-extra-prebuilt';
 
-// fcntl locks are process-associated on POSIX. Every descriptor for a lock file must
-// therefore be serialized within this process, including probes and closes.
+const windows = process.platform === 'win32';
+const lockRange = { offsetLow: 0, offsetHigh: 0, lengthLow: 1, lengthHigh: 0 };
+
+function lockFile(fd, wait) {
+  return new Promise((resolve, reject) => {
+    const done = (error) => error ? reject(error) : resolve();
+    try {
+      if (windows) {
+        let flags = constants.LOCKFILE_EXCLUSIVE_LOCK;
+        if (!wait) flags |= constants.LOCKFILE_FAIL_IMMEDIATELY;
+        lockFileEx(fd, flags, lockRange.offsetLow, lockRange.offsetHigh, lockRange.lengthLow, lockRange.lengthHigh, done);
+      } else {
+        flock(fd, wait ? 'ex' : 'exnb', done);
+      }
+    } catch (error) { reject(error); }
+  });
+}
+
+function unlockFile(fd) {
+  return new Promise((resolve, reject) => {
+    const done = (error) => error ? reject(error) : resolve();
+    try {
+      if (windows) unlockFileEx(fd, lockRange.offsetLow, lockRange.offsetHigh, lockRange.lengthLow, lockRange.lengthHigh, done);
+      else flock(fd, 'un', done);
+    } catch (error) { reject(error); }
+  });
+}
+
+// Kernel locks are per open handle on both platforms. Serialize descriptors for
+// the same lock within this process too, including probes and closes.
 const local = new Map();
 const ownedHandles = new WeakSet();
 const lockPath = (out, name) => path.join(path.resolve(out), name);
@@ -35,8 +63,8 @@ export async function acquireNamedLock(out, name, { wait = true } = {}) {
   let fd;
   try {
     fd = openSync(file, 'a+');
-    await osLock(fd, { exclusive: true, immediate: !wait });
-    const handle = { out, file, fd, released: false, releaseLocal, afterRelease: [], unlock: osUnlock, close: closeSync };
+    await lockFile(fd, wait);
+    const handle = { out, file, fd, released: false, releaseLocal, afterRelease: [], unlock: unlockFile, close: closeSync };
     ownedHandles.add(handle);
     return handle;
   } catch (error) {
@@ -45,7 +73,7 @@ export async function acquireNamedLock(out, name, { wait = true } = {}) {
       try { closeSync(fd); } catch (e) { cleanup.push(e); }
     }
     releaseLocal();
-    if (!wait && ['EACCES', 'EAGAIN', 'EBUSY'].includes(error.code)) return null;
+    if (!wait && ['EACCES', 'EAGAIN', 'EWOULDBLOCK', 'EBUSY'].includes(error.code)) return null;
     if (cleanup.length) Object.defineProperty(error, 'cleanupErrors', { value: cleanup, configurable: true });
     throw error;
   }

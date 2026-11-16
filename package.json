@@ -50,6 +50,6 @@
   ],
   "dependencies": {
     "@ast-grep/cli": "^0.51.2",
-    "os-lock": "^2.0.0"
+    "fs-ext-extra-prebuilt": "^2.2.17"
   }
 }
