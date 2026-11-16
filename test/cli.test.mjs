@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -75,5 +75,36 @@ test('project root comes from --root, then MAP_IT_ALL_ROOT, then the working dir
     assert.match(viaEnv.stdout, new RegExp(path.basename(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     const viaCwd = run(['build'], { cwd: root });
     assert.match(viaCwd.stdout, /packs: convex, express, expo/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('deps and docs run through the CLI offline and use the lockfile version', () => {
+  const root = fixture();
+  const out = path.join(root, '.map-it-all');
+  try {
+    const manifestPath = path.join(root, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.dependencies = { lodash: '4.17.15' };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify({
+      name: manifest.name,
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: manifest.name, dependencies: { lodash: '4.17.15' } },
+        'node_modules/lodash': { version: '4.17.15' },
+      },
+    }));
+
+    const common = ['--root', root, '--out', out];
+    const deps = run(['deps', ...common]);
+    assert.equal(deps.status, 0, deps.stderr);
+    assert.match(deps.stdout, /Possibly unused production dependencies[^\n]*lodash/);
+    assert.match(deps.stdout, /Network lookups are off/);
+
+    const docs = run(['docs', 'lodash', 'debounce', ...common]);
+    assert.equal(docs.status, 0, docs.stderr);
+    assert.match(docs.stdout, /No saved docs for lodash@4\.17\.15/);
+    assert.match(docs.stdout, /Network lookups are off/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

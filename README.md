@@ -7,7 +7,7 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Node 20 or newer" src="https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-8A2BE2">
-  <img alt="One runtime dependency" src="https://img.shields.io/badge/runtime%20deps-1-brightgreen">
+  <img alt="Two runtime dependencies" src="https://img.shields.io/badge/runtime%20deps-2-brightgreen">
   <img alt="Network off by default" src="https://img.shields.io/badge/network-off%20by%20default-lightgrey">
 </p>
 
@@ -52,7 +52,7 @@ Solo developers working with coding agents keep hitting the same walls:
 - **Cleanup leads with the right amount of fear.** No references, test-only references, unmounted routes, unregistered native modules, tests no runner executes, docs pointing at deleted files. Anything an installed client or external caller could still reach is marked `public`: **VERIFY, never REMOVE**.
 - **A session diff.** "What did this session just orphan?" in one call.
 - **A zoomable map you can open** (the picture above).
-- **Local and cheap.** No API keys, no telemetry, and the network is off unless you turn it on. OSV receives package/version queries and advisory IDs in detail URLs; npm and docs hosts receive their requested URLs, remote IP and ordinary HTTP/TLS metadata, including the user-agent. Network metadata may reveal package or repository names. One runtime dependency, [ast-grep](https://ast-grep.github.io). Works with any MCP client: Claude Code, Cursor, VS Code, Codex.
+- **Local and cheap.** No API keys, no telemetry, and the network is off unless you turn it on. OSV receives package/version queries and advisory IDs in detail URLs; npm and docs hosts receive their requested URLs, remote IP and ordinary HTTP/TLS metadata, including the user-agent. Network metadata may reveal package or repository names. Two runtime dependencies: [ast-grep](https://ast-grep.github.io) for code structure and `fs-ext-extra-prebuilt` for cross-process file locks. Works with any MCP client: Claude Code, Cursor, VS Code, Codex.
 
 It does **not** replace a language server or a call-graph tool. For exact, type-aware call graphs, run one next to it (graft, [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp), Serena, CodeGraph). MAP-IT-ALL covers what those do not: registration and liveness facts, session memory and the brief. See the [comparison](#how-it-compares).
 
@@ -266,7 +266,7 @@ npx -y github:peterish8/map-it-all uninstall --purge   # also delete .map-it-all
 
 ```bash
 git clone https://github.com/peterish8/map-it-all.git
-cd map-it-all && npm install            # installs ast-grep, the only dependency
+cd map-it-all && npm install            # installs ast-grep and the native file-lock helper
 ```
 
 Then, from your project folder, call the script by its path:
@@ -648,7 +648,7 @@ Issues and pull requests are welcome, especially **a wrong or missing result wit
 
 ```bash
 git clone https://github.com/peterish8/map-it-all.git && cd map-it-all
-npm install && npm test       # 46 tests: packs, import resolution, memory, MCP protocol, CLI, init, realtime, dependencies
+npm install && npm test       # node:test suite: packs, import resolution, memory, MCP, CLI, docs, dependencies, init and realtime
 ```
 
 ## Acknowledgements
