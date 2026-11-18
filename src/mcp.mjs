@@ -23,6 +23,11 @@ import { validate } from './schema.mjs';
 const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version;
 const MAX_TEXT = 14000;
 
+// Protocol revisions this server speaks (the tool, ping and notification shapes are the same in each). Newest
+// first. A client asking for one of these gets it back; anything else gets the newest, as the MCP lifecycle
+// rules allow, and the client decides whether to continue. 2025-11-25 is not listed: it has not been exercised.
+export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+
 export const PROFILES = {
   minimal: ['brief', 'find', 'connections', 'memory'],
   standard: ['brief', 'find', 'file', 'connections', 'leads', 'symbol', 'diff', 'deps', 'memory', 'handoff', 'realtime'],
@@ -326,7 +331,7 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
       switch (method) {
         case 'initialize':
           return reply({
-            protocolVersion: typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18',
+            protocolVersion: SUPPORTED_PROTOCOL_VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : SUPPORTED_PROTOCOL_VERSIONS[0],
             capabilities: { tools: {} },
             serverInfo: { name: 'map-it-all', version: VERSION },
             instructions: INSTRUCTIONS,

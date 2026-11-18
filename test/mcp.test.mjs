@@ -230,3 +230,14 @@ test('tools/call validates arguments against each inputSchema before the tool ru
     for (const line of c.raw) JSON.parse(line); // stdout carried only protocol messages
   } finally { await c.close(); rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
 });
+
+test('initialize answers with a supported protocol version, not whatever string the client sent', async () => {
+  const root = fixture();
+  const c = client(root);
+  try {
+    assert.equal((await c.call('initialize', { protocolVersion: '2025-03-26' })).result.protocolVersion, '2025-03-26', 'a supported version is echoed');
+    assert.equal((await c.call('initialize', { protocolVersion: '1999-01-01' })).result.protocolVersion, '2025-06-18', 'an unknown version gets the newest supported one');
+    assert.equal((await c.call('initialize', { protocolVersion: 2025 })).result.protocolVersion, '2025-06-18', 'a non-string version gets the newest supported one');
+    assert.equal((await c.call('initialize', {})).result.protocolVersion, '2025-06-18', 'no version gets the newest supported one');
+  } finally { await c.close(); rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
+});
