@@ -41,6 +41,10 @@ async function buildMapUnlocked({ root, out, withKnip = false, write = true, log
 
   const results = {};
   const errors = [];
+  if (ctx.skipped.length) {
+    const sample = ctx.skipped.slice(0, 3).join(', ');
+    errors.push({ extractor: 'scan', message: `${ctx.skipped.length} file(s) skipped: resolves outside the project (${sample}${ctx.skipped.length > 3 ? ', …' : ''})`, soft: true });
+  }
   const timings = {};
   const stats = {};
   const detected = {};

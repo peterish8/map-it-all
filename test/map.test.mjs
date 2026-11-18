@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { buildMap, check, diff, snapshot } from '../src/build.mjs';
@@ -117,4 +119,38 @@ test('diff reports what a session newly orphaned', async () => {
     assert.match(report, /convex:lib\.used/);
     assert.match(report, /VERIFY, not REMOVE/, 'public surface is never presented as removable');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the scanner never reads through a link or junction that resolves outside the project', async (t) => {
+  const root = fixture();
+  const outside = mkdtempSync(path.join(tmpdir(), 'map-it-all-scan-outside-'));
+  try {
+    writeFileSync(path.join(outside, 'secret.ts'), "import { idx } from '@fx/shared';\nexport const SECRET_MARKER = 1;\n");
+    // Git must list these paths for the scanner to see them, so the fixture is a real repository.
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd: root }).status, 0, 'git init');
+    try {
+      // A directory junction needs no admin rights on Windows; on POSIX it is a symlink.
+      symlinkSync(outside, path.join(root, 'linked'), 'junction');
+      symlinkSync(path.join(outside, 'secret.ts'), path.join(root, 'linked-file.ts'), 'file');
+    } catch (error) {
+      t.skip(`cannot create links here (${error.code})`);
+      return;
+    }
+    const out = path.join(root, '.map-it-all');
+    const built = await buildMap({ root, out });
+    const files = JSON.parse(readFileSync(path.join(out, 'files.json'), 'utf8')).files;
+    assert.ok(!files.includes('linked/secret.ts'), 'a file behind an outside junction is not scanned');
+    assert.ok(!files.includes('linked-file.ts'), 'an outside file symlink is not scanned');
+    // The soft note names the skipped paths on purpose; the content and any import edge it would create must not appear.
+    for (const name of readdirSync(out)) {
+      assert.doesNotMatch(readFileSync(path.join(out, name), 'utf8'), /SECRET_MARKER/, `${name} carries no outside content`);
+    }
+    assert.doesNotMatch(readFileSync(path.join(out, 'imports.json'), 'utf8'), /"linked\//, 'no import edge comes from a skipped file');
+    const note = built.stamp.errors.find((e) => e.soft && /resolves outside the project/.test(e.message));
+    assert.ok(note, `a soft note says what was skipped: ${JSON.stringify(built.stamp.errors)}`);
+    assert.match(note.message, /2 file\(s\) skipped/);
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 });
+    rmSync(outside, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 });
+  }
 });
