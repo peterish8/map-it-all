@@ -24,5 +24,6 @@ src/            context, imports, build, store, memory, brief, mcp, view, cli, d
 src/packs/      convex, express, expo (detect + extract)
 src/extractors/ docs, drift, debt, tooling, knip
 test/           node:test, fixtures build a throwaway project
+scripts/        run-tests.mjs (the npm test file list; works on Node 20 and 22)
 docs/           agents, memory, packs, rtk
 ```

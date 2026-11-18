@@ -29,7 +29,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node scripts/run-tests.mjs",
     "demo": "node bin/map-it-all.mjs demo --open"
   },
   "keywords": [
