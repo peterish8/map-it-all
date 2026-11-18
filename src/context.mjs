@@ -3,11 +3,12 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { globToRegExp, loadConfig } from './config.mjs';
+import { isRealInside, isRealInsideOf, realRootOf } from './paths.mjs';
 import { lineAt, norm } from './records.mjs';
 
 export const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -38,7 +39,8 @@ function walk(root, dir = '', out = []) {
 
 /**
  * Tracked plus untracked-not-ignored files that exist on disk (git), or a directory walk outside git.
- * One stat per file gives both "does it exist" and its size, so reads never stat again.
+ * One lstat per file gives both "does it exist" and its size, so reads never stat again. A path whose
+ * directories or own link resolve outside the project is skipped and reported in `skipped`, never read.
  */
 export function scanFiles(root, ignore = []) {
   const listed = git(root, ['ls-files', '-co', '--exclude-standard', '-z']);
@@ -46,16 +48,39 @@ export function scanFiles(root, ignore = []) {
   const extra = ignore.map(globToRegExp);
   const sizes = new Map();
   const files = [];
+  const skipped = [];
+  // A junction in the middle of a path leads outside without the last component being a link, so each
+  // directory is checked once (a few hundred realpath calls, not one per file).
+  const dirInside = new Map();
+  const realRootPath = realRootOf(root);
+  const inside = (dir) => {
+    if (!dirInside.has(dir)) dirInside.set(dir, isRealInsideOf(realRootPath, path.join(root, dir)));
+    return dirInside.get(dir);
+  };
   for (const f of new Set(names)) {
     if (f.split('/').some((seg) => SKIP_DIRS.has(seg)) || SKIP_FILES.has(path.posix.basename(f)) || extra.some((re) => re.test(f))) continue;
     try {
-      const s = statSync(path.join(root, f));
+      const abs = path.join(root, f);
+      if (!inside(path.posix.dirname(f))) { skipped.push(f); continue; }
+      const link = lstatSync(abs);
+      let s = link;
+      if (link.isSymbolicLink()) {
+        if (!isRealInsideOf(realRootPath, abs)) { skipped.push(f); continue; }
+        s = statSync(abs);
+      }
       if (!s.isFile()) continue;
       sizes.set(f, s.size);
       files.push(f);
     } catch { /* deleted in the working tree but still listed */ }
   }
-  return { files: files.sort(), sizes };
+  return { files: files.sort(), sizes, skipped: skipped.sort() };
+}
+
+/** Bytes of a file in the project. Throws when the path resolves outside the project, so it is never read. */
+function readInside(root, f) {
+  const abs = path.join(root, f);
+  if (!isRealInside(root, abs)) throw new Error(`${f} resolves outside the project`);
+  return readFileSync(abs);
 }
 
 export const listFiles = (root, ignore = []) => scanFiles(root, ignore).files;
@@ -90,12 +115,12 @@ export function fingerprint(root) {
   }
   for (const d of dirs) for (const l of SKIP_FILES) if (existsSync(path.join(root, d, l))) locks.add(d ? `${d}/${l}` : l);
   for (const f of [...locks].sort()) {
-    try { hash.update(`${f}:`).update(readFileSync(path.join(root, f))); } catch { hash.update(`${f}:gone`); }
+    try { hash.update(`${f}:`).update(readInside(root, f)); } catch { hash.update(`${f}:gone`); }
   }
   // Dependency ranges are build inputs even when a manifest edit preserves file size and mtime.
   for (const f of manifests.sort()) {
     hash.update(`manifest:${f}:`);
-    try { hash.update(readFileSync(path.join(root, f))); } catch { hash.update(existsSync(path.join(root, f)) ? '<unreadable>' : '<missing>'); }
+    try { hash.update(readInside(root, f)); } catch { hash.update(existsSync(path.join(root, f)) ? '<unreadable>' : '<missing>'); }
   }
   return { head, branch, dirty, dirtyHash: hash.digest('hex').slice(0, 16) };
 }
@@ -129,7 +154,7 @@ function launcherFor(bin) {
 
 export function createContext(root, config = loadConfig(root)) {
   root = path.resolve(root);
-  const { files, sizes } = scanFiles(root, config.ignore);
+  const { files, sizes, skipped } = scanFiles(root, config.ignore);
   const fileSet = new Set(files);
   const cache = new Map();
   const history = config.historyDirs.map((d) => d.replace(/\/+$/, ''));
@@ -146,6 +171,7 @@ export function createContext(root, config = loadConfig(root)) {
     root,
     config,
     files,
+    skipped,
     has: (f) => fileSet.has(f),
     isTest: isTestPath,
     isHistory: inHistory,

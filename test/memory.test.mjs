@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { createMemory } from '../src/memory.mjs';
@@ -9,6 +11,41 @@ function withMemory(fn) {
   const root = fixture();
   try { return fn(root, createMemory({ root, dir: path.join(root, '.map-it-all', 'memory') })); } finally { rmSync(root, { recursive: true, force: true }); }
 }
+
+test('anchors and handoff files that escape the project are refused, even when the target exists', () => withMemory((root, memory) => {
+  const outside = mkdtempSync(path.join(tmpdir(), 'map-it-all-memory-escape-'));
+  try {
+    writeFileSync(path.join(outside, 'outside.txt'), 'outside content\n');
+    const escaping = path.relative(root, path.join(outside, 'outside.txt')).replaceAll('\\', '/');
+    assert.ok(escaping.startsWith('..'), `fixture sanity: ${escaping} leaves the project`);
+    assert.throws(() => memory.remember({ title: 't', body: 'b', anchors: [escaping] }), /not a file in this project/);
+    assert.throws(() => memory.remember({ title: 't', body: 'b', anchors: ['C:\\Windows\\win.ini'] }), /not a file in this project/);
+    assert.throws(() => memory.saveHandoff({ summary: 's', files: [escaping] }), /not a file in this project/);
+    assert.throws(() => memory.saveHandoff({ summary: 's', files: ['..'] }), /not a file in this project/);
+    assert.equal(memory.list().length, 0, 'nothing is written for a refused note');
+    assert.equal(memory.readHandoff(), null, 'nothing is written for a refused handoff');
+  } finally { rmSync(outside, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
+}));
+
+test('an older note whose stored anchor escapes the project loads as orphaned and never reads outside', () => withMemory((root, memory) => {
+  const outside = mkdtempSync(path.join(tmpdir(), 'map-it-all-memory-outside-'));
+  try {
+    const secret = path.join(outside, 'secret.txt');
+    writeFileSync(secret, 'outside content\n');
+    const hash = createHash('sha1').update('outside content\n').digest('hex').slice(0, 16);
+    const notes = path.join(root, '.map-it-all', 'memory', 'notes');
+    mkdirSync(notes, { recursive: true });
+    const now = new Date().toISOString();
+    // Written the way an earlier version would have: the hash matches the file outside the project.
+    writeFileSync(path.join(notes, 'old-note.json'), JSON.stringify({
+      id: 'old-note', title: 'old', body: 'b', kind: 'fact', tags: [], pins: [], head: null, created: now, updated: now,
+      anchors: [{ path: path.relative(root, secret).replaceAll('\\', '/'), hash }],
+    }));
+    const [note] = memory.list();
+    assert.equal(note.status, 'orphaned', 'an anchor that resolves outside is missing, not fresh');
+    assert.deepEqual(note.anchorStates, [{ path: note.anchors[0].path, state: 'missing' }]);
+  } finally { rmSync(outside, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
+}));
 
 test('a note anchored to a file goes stale when the file changes, orphaned when it vanishes', () => withMemory((root, memory) => {
   const saved = memory.remember({ title: 'lib.used is cached upstream', body: 'Do not add caching in the handler.', kind: 'gotcha', anchors: ['convex/lib.ts'], tags: ['Convex'] });

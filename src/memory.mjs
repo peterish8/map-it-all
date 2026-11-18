@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { git } from './context.mjs';
+import { PathError, resolveInside } from './paths.mjs';
 
 const KINDS = ['fact', 'decision', 'gotcha', 'todo', 'preference'];
 const MAX_BODY = 2000;
@@ -16,9 +17,13 @@ const MAX_TITLE = 120;
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'note';
 
-/** Hash a file's text with CRLF normalised, so line-ending churn is not "staleness". */
+/**
+ * Hash a file's text with CRLF normalised, so line-ending churn is not "staleness". A path that is not a file
+ * inside the project (an escape, or a link that leads out) hashes to null, the same as a missing file.
+ */
 export function hashFile(root, rel) {
-  const full = path.join(root, rel);
+  let full;
+  try { full = resolveInside(root, rel); } catch (error) { if (error instanceof PathError) return null; throw error; }
   if (!existsSync(full) || !statSync(full).isFile()) return null;
   return createHash('sha1').update(readFileSync(full, 'utf8').replaceAll('\r\n', '\n')).digest('hex').slice(0, 16);
 }
@@ -59,8 +64,10 @@ export function createMemory({ root, dir, versionOf }) {
   function toAnchors(paths = []) {
     return paths.map((raw) => {
       const p = raw.replaceAll('\\', '/').replace(/:\d+(-\d+)?$/, '');
-      const hash = hashFile(root, p);
-      if (hash === null) throw new Error(`anchor "${p}" is not a file in this project. Anchors must be existing files (use a path relative to the repo root).`);
+      let why = '';
+      try { resolveInside(root, p); } catch (error) { if (!(error instanceof PathError)) throw error; why = ` (${error.reason})`; }
+      const hash = why ? null : hashFile(root, p);
+      if (hash === null) throw new Error(`anchor "${p}" is not a file in this project${why}. Anchors must be existing files (use a path relative to the repo root).`);
       return { path: p, hash };
     });
   }

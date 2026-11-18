@@ -18,8 +18,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - Faster builds: a 2,500-file monorepo went from about 11 s to about 4 to 5 s. Backtracking path regexes were replaced by linear tokenisation, npm-script references are found in one pass, and each file is stat'ed once.
 - Map files are written atomically (stamp last) and readers wait for a build in progress, so a tool call never sees a half-written map.
 - The MCP `standard` and `full` profiles include the `realtime` tool (about 1,270 and 1,400 tokens of definitions).
+- CI runs install, `npm test`, `check` and `doctor` on Node 20 and Node 22, on Ubuntu and Windows. Job names now include the Node version, so any branch rule that names the old job must be updated. `npm test` runs its test files through `scripts/run-tests.mjs`: on Node 20 the previous quoted glob made `npm test` exit with "Could not find" and run no tests, because Node 20 does not expand that glob.
 
 ### Fixed
+- Paths from agents: memory anchors and handoff files that are absolute, drive-relative, UNC, device, NTFS-stream or NUL-containing paths, or that leave the project with `..`, are refused with the usual "not a file in this project" message, and an existing file outside the project is no longer accepted. A stored anchor that leaves the project loads as missing, so older notes still load.
+- The scanner no longer reads a file through a symlink or Windows junction that resolves outside the project. Such files are left out of the map, and the map's generator notes say how many were skipped.
+- MCP `tools/call` checks arguments against each tool's declared schema (types, enums, required fields, ranges). A bad call returns JSON-RPC `-32602` naming the tool and field, and the tool does not run. Unknown properties are ignored, and `null` counts as absent. Tool definitions are unchanged.
+- MCP `initialize` answers with a supported protocol version (`2025-06-18`, `2025-03-26` or `2024-11-05`) instead of echoing whatever the client sent; an unsupported request gets the newest supported version.
 - Docs: a per-OS setup guide for macOS, Windows (PowerShell, cmd, Git Bash) and Linux/WSL: installing Node and git, the right `claude mcp add` form for each shell, opening the map, and the usual PATH, execution-policy and cross-OS `.mcp.json` pitfalls.
 - Docs: the Claude Code one-liner failed in Windows PowerShell with `unknown option '-y'` because PowerShell swallows an unquoted `--`. The README and `docs/agents.md` now show the PowerShell form (`'--'`) and a shell-independent alternative (`init --agent claude --npx`).
 

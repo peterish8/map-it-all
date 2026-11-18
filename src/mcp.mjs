@@ -18,9 +18,15 @@ import { hookInstalled } from './init.mjs';
 import { createMemory, formatHandoff, formatNote } from './memory.mjs';
 import { handoffQueuedWork, setEnabled, status as realtimeStatus } from './realtime.mjs';
 import { findRecords, flagsOf, formatConnections, loadStore, mermaid, resolveTarget, LEAD_FLAGS } from './store.mjs';
+import { validate } from './schema.mjs';
 
 const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version;
 const MAX_TEXT = 14000;
+
+// Protocol revisions this server speaks (the tool, ping and notification shapes are the same in each). Newest
+// first. A client asking for one of these gets it back; anything else gets the newest, as the MCP lifecycle
+// rules allow, and the client decides whether to continue. 2025-11-25 is not listed: it has not been exercised.
+export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const PROFILES = {
   minimal: ['brief', 'find', 'connections', 'memory'],
@@ -325,7 +331,7 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
       switch (method) {
         case 'initialize':
           return reply({
-            protocolVersion: typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18',
+            protocolVersion: SUPPORTED_PROTOCOL_VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : SUPPORTED_PROTOCOL_VERSIONS[0],
             capabilities: { tools: {} },
             serverInfo: { name: 'map-it-all', version: VERSION },
             instructions: INSTRUCTIONS,
@@ -335,8 +341,12 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
         case 'tools/call': {
           const tool = active.find((t) => t.name === params?.name);
           if (!tool) return fail(-32602, `Unknown tool: ${params?.name}`);
+          const args = params.arguments ?? {};
+          // Refused before the tool runs: a wrong type or value never reaches the map, memory or git.
+          const problems = validate(tool.inputSchema, args);
+          if (problems.length) return fail(-32602, `invalid arguments for ${tool.name}: ${problems.map((p) => `${p.path || 'arguments'} ${p.message}`).join('; ')}`);
           try {
-            return reply({ content: [{ type: 'text', text: clip(String(await tool.run(params.arguments ?? {}))) }] });
+            return reply({ content: [{ type: 'text', text: clip(String(await tool.run(args))) }] });
           } catch (error) {
             return reply({ content: [{ type: 'text', text: `${tool.name} failed: ${error.message ?? error}` }], isError: true });
           }
