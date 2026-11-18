@@ -199,3 +199,34 @@ test('MCP deps respects offline policy, refresh, explicit online, and the offlin
     rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 });
   }
 });
+
+test('tools/call validates arguments against each inputSchema before the tool runs', async () => {
+  const root = fixture();
+  const c = client(root);
+  try {
+    await c.call('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    const rejected = [
+      ['connections', {}, /connections: target is required/],
+      ['connections', { target: 'convex/lib.ts', depth: 99 }, /depth must be at most 4 \(got 99\)/],
+      ['find', { limit: 'ten' }, /limit must be an integer \(got string\)/],
+      ['memory', { action: 'drop' }, /action must be one of remember, recall, confirm, forget, list/],
+      ['memory', { action: 'remember', title: 'x', body: 'y', anchors: 'server/app.ts' }, /anchors must be an array \(got string\)/],
+      ['memory', { action: 'remember', title: 'x', body: 'y', anchors: [1] }, /anchors\[0\] must be a string/],
+      ['brief', ['not', 'an', 'object']],
+    ];
+    for (const [name, args, message] of rejected) {
+      const r = await c.call('tools/call', { name, arguments: args });
+      assert.equal(r.error?.code, -32602, `${name} ${JSON.stringify(args)} is a protocol error`);
+      assert.match(r.error.message, /^invalid arguments for /, 'the message names the tool');
+      assert.match(r.error.message, message ?? /arguments must be an object/);
+      assert.equal(r.result, undefined, 'no tool result is returned');
+    }
+    // The memory calls above were refused before the tool ran: nothing was saved.
+    assert.equal((await c.tool('memory', { action: 'list' })).text, 'No notes yet.');
+
+    // Unknown properties are ignored (compatibility), and valid arguments still work.
+    assert.match((await c.tool('find', { flag: 'unmounted', surprise: true })).text, /express:GET \/lost/);
+    assert.match((await c.tool('brief', { extra: 1 })).text, /Session brief/);
+    for (const line of c.raw) JSON.parse(line); // stdout carried only protocol messages
+  } finally { await c.close(); rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
+});

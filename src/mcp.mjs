@@ -18,6 +18,7 @@ import { hookInstalled } from './init.mjs';
 import { createMemory, formatHandoff, formatNote } from './memory.mjs';
 import { handoffQueuedWork, setEnabled, status as realtimeStatus } from './realtime.mjs';
 import { findRecords, flagsOf, formatConnections, loadStore, mermaid, resolveTarget, LEAD_FLAGS } from './store.mjs';
+import { validate } from './schema.mjs';
 
 const VERSION = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version;
 const MAX_TEXT = 14000;
@@ -335,8 +336,12 @@ export function createServer({ root, profile = 'standard', outOverride, allowOnl
         case 'tools/call': {
           const tool = active.find((t) => t.name === params?.name);
           if (!tool) return fail(-32602, `Unknown tool: ${params?.name}`);
+          const args = params.arguments ?? {};
+          // Refused before the tool runs: a wrong type or value never reaches the map, memory or git.
+          const problems = validate(tool.inputSchema, args);
+          if (problems.length) return fail(-32602, `invalid arguments for ${tool.name}: ${problems.map((p) => `${p.path || 'arguments'} ${p.message}`).join('; ')}`);
           try {
-            return reply({ content: [{ type: 'text', text: clip(String(await tool.run(params.arguments ?? {}))) }] });
+            return reply({ content: [{ type: 'text', text: clip(String(await tool.run(args))) }] });
           } catch (error) {
             return reply({ content: [{ type: 'text', text: `${tool.name} failed: ${error.message ?? error}` }], isError: true });
           }
