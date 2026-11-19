@@ -494,7 +494,7 @@ test('fetchText keeps timeout and response size caps on pinned requests, includi
   });
   await new Promise((resolve) => streaming.listen(0, '127.0.0.1', resolve));
   try {
-    const streamP = assert.rejects(fetchText(`http://127.0.0.1:${streaming.address().port}`, { trusted: true, timeoutMs: 180, maxBytes: 100 }), /timed out/);
+    const streamP = assert.rejects(fetchText(`http://127.0.0.1:${streaming.address().port}`, { trusted: true, timeoutMs: 180, requestTimeoutMs: 10_000, maxBytes: 100 }), /timed out/);
     await connectedPromise;
     for (let i = 0; i < 6; i++) {
       t.mock.timers.tick(30);
