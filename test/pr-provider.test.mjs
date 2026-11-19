@@ -200,3 +200,125 @@ test('the PR path never imports the network module (defect d)', () => {
     assert.doesNotMatch(text, /net\.mjs|fetchText|networkPolicy/, `${f} must not use src/net.mjs`);
   }
 });
+
+// ---- gh transport (read-only, by argv) -------------------------------------------------------------------
+
+const FAKE_GH = path.join(FIXTURES, '..', 'fake-gh.mjs');
+const BASE_ENV = (() => {
+  const env = { ...process.env };
+  for (const key of ['MAP_IT_ALL_GH_REPLAY', 'MAP_IT_ALL_OFFLINE', 'MAP_IT_ALL_GH_BIN']) delete env[key];
+  return env;
+})();
+const REPO = 'repos/fixture-org/fixture-repo';
+const PR_BODY = JSON.stringify({ data: { repository: { id: 'R_fx_0001', nameWithOwner: 'fixture-org/fixture-repo', pullRequest: { number: 42, headRefOid: B, baseRefName: 'main', baseRefOid: '1'.repeat(40) } } } });
+
+function ghSandbox(answers) {
+  const { dir, cleanup } = scratch();
+  const script = path.join(dir, 'answers.json');
+  writeFileSync(script, JSON.stringify(answers));
+  const log = path.join(dir, 'argv.log');
+  const env = { ...BASE_ENV, MAP_IT_ALL_GH_BIN: FAKE_GH, FAKE_GH_SCRIPT: script, FAKE_GH_LOG: log };
+  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []);
+  return { env, calls, cleanup };
+}
+
+test('PR reads run gh by argv: GraphQL for the pull request, paginated GET for lists', () => {
+  const sb = ghSandbox({
+    graphql: { stdout: PR_BODY, code: 0 },
+    [`${REPO}/pulls/42/commits`]: { stdout: `${JSON.stringify({ sha: A })}\n${JSON.stringify({ sha: B })}\n`, code: 0 },
+  });
+  try {
+    const p = createProvider({ target: TARGET, env: sb.env });
+    assert.equal(p.name, 'gh');
+    const pr = p.read('pullRequest');
+    assert.equal(pr.status, 200);
+    assert.equal(pr.gap, null);
+    assert.equal(pr.body.data.repository.pullRequest.headRefOid, B);
+    assert.deepEqual(p.read('pullRequestCommits').body, [{ sha: A }, { sha: B }], 'one JSON value per line becomes one array');
+    const [graphql, list] = sb.calls();
+    assert.deepEqual(graphql.slice(0, 2), ['api', 'graphql']);
+    assert.ok(graphql.includes('owner=fixture-org') && graphql.includes('name=fixture-repo') && graphql.includes('number=42'));
+    const query = graphql[graphql.indexOf('-f') + 1].replace(/^query=/, '');
+    assert.match(query, /^query\(/);
+    assert.match(query, /pullRequest\(number: \$number\)/);
+    assert.doesNotMatch(query, /mutation/, 'the GraphQL call is a query');
+    assert.deepEqual(list.slice(0, 4), ['api', '--method', 'GET', '--paginate']);
+    assert.equal(list.at(-1), `${REPO}/pulls/42/commits?per_page=100`);
+  } finally { sb.cleanup(); }
+});
+
+test('no write verb or unvetted argument reaches gh; every call is a GET or a query', () => {
+  const sha = B;
+  const answers = {
+    graphql: { stdout: PR_BODY, code: 0 },
+    [`${REPO}/pulls/42/commits`]: { stdout: '', code: 0 },
+    [`${REPO}/rules/branches/main`]: { stdout: '', code: 0 },
+    [`${REPO}/branches/main`]: { stdout: '{"name":"main","protected":false}', code: 0 },
+    [`${REPO}/commits/${sha}/check-runs`]: { stdout: '', code: 0 },
+    [`${REPO}/commits/${sha}/status`]: { stdout: '', code: 0 },
+    [`${REPO}/actions/jobs/91`]: { stdout: '{"id":91,"run_id":61,"run_attempt":1,"head_sha":"' + sha + '"}', code: 0 },
+  };
+  const sb = ghSandbox(answers);
+  try {
+    const p = createProvider({ target: TARGET, env: sb.env });
+    for (const op of ['pullRequest', 'pullRequestCommits', 'branchRules:main', 'branch:main', `checkRuns:${sha}`, `commitStatuses:${sha}`, 'actionsJob:91']) p.read(op);
+    const calls = sb.calls();
+    assert.equal(calls.length, 7, 'one gh process per operation');
+    for (const args of calls) {
+      assert.equal(args.some((a) => /^(POST|PUT|PATCH|DELETE)$/i.test(a)), false, `no write verb in ${args.join(' ')}`);
+      assert.equal(args.some((a) => a === '-X' || a.startsWith('--method=') || a === '--input'), false, `no write flag in ${args.join(' ')}`);
+      const method = args[args.indexOf('--method') + 1];
+      if (args.includes('--method')) assert.equal(method, 'GET');
+      if (args.includes('graphql')) assert.ok(!args.some((a) => /\bmutation\b/.test(a)), 'graphql is a query');
+    }
+  } finally { sb.cleanup(); }
+  const src = readFileSync(path.join(ROOT, 'src', 'pr', 'github.mjs'), 'utf8');
+  assert.doesNotMatch(src, /['"`](POST|PUT|PATCH|DELETE)['"`]/, 'github.mjs names no write verb');
+  assert.doesNotMatch(src, /\bshell\s*:\s*true/, 'github.mjs never uses a shell');
+});
+
+function readWith(answer) {
+  const sb = ghSandbox({ graphql: answer });
+  return { read: () => createProvider({ target: TARGET, env: sb.env }).read('pullRequest'), cleanup: sb.cleanup };
+}
+
+test('gh failures are classified per operation: auth, access, not found, rate limit, server, partial', () => {
+  const cases = [
+    [{ stdout: '', stderr: 'gh: Bad credentials (HTTP 401)\n', code: 1 }, 401, 'auth'],
+    [{ stdout: '', stderr: 'gh: Resource not accessible by integration (HTTP 403)\n', code: 1 }, 403, 'forbidden'],
+    [{ stdout: '', stderr: 'gh: API rate limit exceeded for user. (HTTP 403)\n', code: 1 }, 403, 'rate_limited'],
+    [{ stdout: '', stderr: 'gh: Not Found (HTTP 404)\n', code: 1 }, 404, 'not_found_or_no_access'],
+    [{ stdout: '', stderr: 'gh: Server Error (HTTP 502)\n', code: 1 }, 502, 'provider_error'],
+    [{ stdout: '', stderr: 'To get started with GitHub CLI, please run:  gh auth login\n', code: 4 }, 401, 'auth'],
+    [{ stdout: JSON.stringify({ data: { repository: { pullRequest: null } }, errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a PullRequest with the number of 42.' }] }), stderr: '', code: 1 }, 200, 'not_found_or_no_access'],
+    [{ stdout: JSON.stringify({ data: { repository: { id: 'R_fx_0001', pullRequest: { number: 42 } } }, errors: [{ message: 'Resource not accessible' }] }), stderr: '', code: 1 }, 200, 'partial'],
+  ];
+  for (const [answer, status, gap] of cases) {
+    const r = readWith(answer);
+    try {
+      const got = r.read();
+      assert.equal(got.gap, gap, `${answer.stderr || answer.stdout.slice(0, 40)} -> ${gap}`);
+      assert.equal(got.status, status, `status for ${gap}`);
+      assert.equal(got.body === null || typeof got.body === 'object', true);
+    } finally { r.cleanup(); }
+  }
+});
+
+test('a missing gh is an unavailable read with the install hint, not a stack trace', () => {
+  const env = { ...BASE_ENV, MAP_IT_ALL_GH_BIN: path.join(ROOT, 'test', 'fixtures', 'pr', 'no-such-dir', 'gh') };
+  const r = createProvider({ target: TARGET, env }).read('pullRequest');
+  assert.equal(r.gap, 'unavailable');
+  assert.equal(r.body, null);
+  assert.match(r.message, /gh auth login/);
+  assert.match(r.message, /cli\.github\.com/);
+});
+
+test('paged check runs become one body with every run, in order', () => {
+  const run = (id) => JSON.stringify({ id, name: 'test (ubuntu-latest)', head_sha: B, status: 'completed', conclusion: 'success' });
+  const sb = ghSandbox({ [`${REPO}/commits/${B}/check-runs`]: { stdout: `${run(9201)}\n${run(9202)}\n`, code: 0 } });
+  try {
+    const body = createProvider({ target: TARGET, env: sb.env }).read(`checkRuns:${B}`).body;
+    assert.deepEqual(body.check_runs.map((r) => r.id), [9201, 9202]);
+    assert.equal(body.total_count, 2);
+  } finally { sb.cleanup(); }
+});

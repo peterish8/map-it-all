@@ -3,6 +3,7 @@
 //   - gh (default): read-only `gh api` calls by argv (src/pr/github.mjs).
 // Callers depend only on createProvider(), read(op) and beginReconcile(). See contract.mjs for the gaps.
 
+import { createGitHubProvider } from './github.mjs';
 import { createReplayProvider } from './replay.mjs';
 
 export { GAP, finalize, read } from './contract.mjs';
@@ -14,5 +15,5 @@ export { ReplayExhausted } from './replay.mjs';
  */
 export function createProvider({ target, env = process.env } = {}) {
   if (env.MAP_IT_ALL_GH_REPLAY) return createReplayProvider({ target, file: env.MAP_IT_ALL_GH_REPLAY });
-  throw new Error('gh transport is not wired yet');
+  return createGitHubProvider({ target, env });
 }
