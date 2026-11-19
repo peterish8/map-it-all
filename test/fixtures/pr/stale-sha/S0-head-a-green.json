@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "kind": "pratzystack.github-replay",
+  "scenario": "S0-head-a-green",
+  "now": "2026-11-16T04:10:00Z",
+  "target": {
+    "owner": "fixture-org",
+    "repo": "fixture-repo",
+    "number": 42
+  },
+  "operations": {
+    "pullRequest": {
+      "status": 200,
+      "body": {
+        "data": {
+          "repository": {
+            "id": "R_fx_0001",
+            "nameWithOwner": "fixture-org/fixture-repo",
+            "pullRequest": {
+              "id": "PR_fx_0042",
+              "number": 42,
+              "url": "https://github.com/fixture-org/fixture-repo/pull/42",
+              "state": "OPEN",
+              "isDraft": false,
+              "mergedAt": null,
+              "baseRefName": "main",
+              "baseRefOid": "1111111111111111111111111111111111111111",
+              "headRefName": "feature/stale-sha",
+              "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "headRepository": {
+                "id": "R_fx_0001",
+                "nameWithOwner": "fixture-org/fixture-repo"
+              },
+              "mergeable": "MERGEABLE",
+              "mergeStateStatus": "CLEAN",
+              "reviewDecision": null,
+              "mergeQueueEntry": null,
+              "autoMergeRequest": null,
+              "reviewThreads": {
+                "nodes": [],
+                "pageInfo": {
+                  "hasNextPage": false
+                }
+              },
+              "commits": {
+                "nodes": [
+                  {
+                    "commit": {
+                      "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "committedDate": "2026-11-16T04:00:00Z",
+                      "statusCheckRollup": null
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "pullRequestCommits": {
+      "status": 200,
+      "body": [
+        {
+          "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "branchRules:main": {
+      "status": 200,
+      "body": [
+        {
+          "type": "required_status_checks",
+          "ruleset_id": 7001,
+          "ruleset_source_type": "Repository",
+          "ruleset_source": "fixture-org/fixture-repo",
+          "parameters": {
+            "strict_required_status_checks_policy": false,
+            "required_status_checks": [
+              {
+                "context": "test (ubuntu-latest)",
+                "integration_id": 15368
+              },
+              {
+                "context": "test (windows-latest)",
+                "integration_id": 15368
+              }
+            ]
+          }
+        },
+        {
+          "type": "pull_request",
+          "ruleset_id": 7001,
+          "ruleset_source_type": "Repository",
+          "ruleset_source": "fixture-org/fixture-repo",
+          "parameters": {
+            "required_approving_review_count": 0,
+            "dismiss_stale_reviews_on_push": false,
+            "require_code_owner_review": false,
+            "require_last_push_approval": false,
+            "required_review_thread_resolution": false
+          }
+        }
+      ]
+    },
+    "branch:main": {
+      "status": 200,
+      "body": {
+        "name": "main",
+        "protected": false
+      }
+    },
+    "checkRuns:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+      "status": 200,
+      "body": {
+        "total_count": 2,
+        "check_runs": [
+          {
+            "id": 9101,
+            "name": "test (ubuntu-latest)",
+            "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-11-16T04:05:00Z",
+            "completed_at": "2026-11-16T04:08:00Z",
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "details_url": "https://github.com/fixture-org/fixture-repo/actions/runs/61/job/91"
+          },
+          {
+            "id": 9102,
+            "name": "test (windows-latest)",
+            "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-11-16T04:05:00Z",
+            "completed_at": "2026-11-16T04:09:00Z",
+            "app": {
+              "id": 15368,
+              "slug": "github-actions"
+            },
+            "details_url": "https://github.com/fixture-org/fixture-repo/actions/runs/61/job/92"
+          }
+        ]
+      }
+    },
+    "commitStatuses:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+      "status": 200,
+      "body": {
+        "state": "pending",
+        "statuses": []
+      }
+    },
+    "actionsJob:91": {
+      "status": 200,
+      "body": {
+        "id": 91,
+        "run_id": 61,
+        "run_attempt": 1,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "actionsJob:92": {
+      "status": 200,
+      "body": {
+        "id": 92,
+        "run_id": 61,
+        "run_attempt": 1,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  }
+}
