@@ -15,9 +15,12 @@ import { createMemory, formatHandoff, formatNote } from './memory.mjs';
 import { PROFILES, createServer, serveStdio } from './mcp.mjs';
 import { runWorker, setEnabled, status as realtimeStatus } from './realtime.mjs';
 import { findRecords, loadStore } from './store.mjs';
+import { buildTaskContext, expandEvidence, formatPacket } from './packet/task.mjs';
 import { renderView } from './view.mjs';
 
 const VALUE_FLAGS = ['root', 'out', 'kind', 'flag', 'limit', 'agent', 'profile', 'direction', 'depth', 'docs', 'only', 'worker-ready'];
+// Packet commands (context, review): these take a value, so `--base main` is not a flag plus a positional.
+VALUE_FLAGS.push('task', 'base', 'max-tokens', 'expand');
 
 function parse(argv) {
   const opts = { _: [], flags: {} };
@@ -44,6 +47,7 @@ const COMMANDS = [
   ['build', '[--with-knip]', 'build the map (a few seconds)'],
   ['view', '[--open] [--embed]', 'build and print the path of the zoomable map page'],
   ['brief', '', 'session brief: git, stack, layout, hotspots, leads, handoff, memory'],
+  ['context', '--task "<text>" [--base REF] [--max-tokens N] [--json] | --expand <evidence-id> [--json]', 'capped evidence for a task: changed files, importers two hops out, map records and memory, each with source, confidence and reason; nothing stored, no model call'],
   ['query', '<text> [--kind k] [--flag f] [--limit n]', 'find routes, functions, modules, docs, scripts…'],
   ['file', '<path>', 'everything known about one file: records, importers, imports, notes'],
   ['connections', '<file|record> [--direction in|out|both] [--depth n] [--mermaid]', 'blast radius: who depends on it, what it depends on, who calls it'],
@@ -174,6 +178,31 @@ export async function main(argv) {
     case 'brief': {
       await ensure(root, out);
       console.log(renderBrief({ root, store: loadStore(out), memory: createMemory({ root, dir: memDir, versionOf }), files: readFilesList(out), hidden: config.historyDirs }));
+      break;
+    }
+    case 'context': {
+      // Stateless: nothing is stored. Usage problems exit 2 with the rule; the CLI and the MCP tool share buildTaskContext.
+      if (flags.expand !== undefined) {
+        if (flags.expand === true) { console.error(commandHelp('context')); process.exit(2); }
+        try {
+          const span = expandEvidence({ root, id: flags.expand });
+          console.log(flags.json ? JSON.stringify(span) : `${span.path}:${span.startLine}-${span.endLine}\n${span.text}`);
+        } catch (error) { if (!error.code) throw error; console.error(error.message); process.exit(2); }
+        break;
+      }
+      if (flags.task === undefined || flags.task === true) { console.error(commandHelp('context')); process.exit(2); }
+      await ensure(root, out);
+      try {
+        const packet = buildTaskContext({
+          root,
+          store: loadStore(out),
+          memory: createMemory({ root, dir: memDir, versionOf }),
+          task: flags.task,
+          base: flags.base === undefined ? undefined : flags.base === true ? '' : flags.base,
+          maxTokens: flags['max-tokens'] === undefined ? undefined : Number(flags['max-tokens'] === true ? NaN : flags['max-tokens']),
+        });
+        console.log(flags.json ? JSON.stringify(packet) : formatPacket(packet));
+      } catch (error) { if (!error.code) throw error; console.error(error.message); process.exit(2); }
       break;
     }
     case 'session-start': {
