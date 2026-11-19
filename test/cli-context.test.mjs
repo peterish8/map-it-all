@@ -105,6 +105,20 @@ test('--expand prints the span for an evidence ID from the packet', () => {
   }
 });
 
+test('two separate processes on the same tree print byte-identical packet JSON (T6)', () => {
+  const root = seededRepo();
+  try {
+    write(root, 'src/helpers.mjs', 'export function formatOrder(items) { return items.map((i) => i); }\n');
+    const first = run(root, ['context', '--task', TASK, '--json']);
+    const second = run(root, ['context', '--task', TASK, '--json']);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(first.stdout, second.stdout);
+  } finally {
+    removeFixture(root);
+  }
+});
+
 test('context writes nothing outside .map-it-all/ (the packet is never stored)', () => {
   const root = seededRepo();
   try {
