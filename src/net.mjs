@@ -82,7 +82,7 @@ function withTimeout(promise, ms) {
  * service endpoints (OSV, npm registry, or a test server). Every redirect is independently resolved;
  * untrusted destinations require public HTTPS addresses.
  */
-export async function fetchText(url, { method = 'GET', body, headers = {}, timeoutMs = 8000, maxBytes = 1_000_000, trusted = false, resolve = lookup } = {}) {
+export async function fetchText(url, { method = 'GET', body, headers = {}, timeoutMs = 8000, requestTimeoutMs, maxBytes = 1_000_000, trusted = false, resolve = lookup } = {}) {
   const deadline = Date.now() + timeoutMs;
   const timeoutError = () => new Error(`request timed out after ${timeoutMs} ms`);
   let activeRequest;
@@ -110,7 +110,7 @@ export async function fetchText(url, { method = 'GET', body, headers = {}, timeo
       if (u.protocol !== 'https:' && !(sameOrigin && u.protocol === 'http:')) throw new Error('refusing non-https URL');
       const transport = u.protocol === 'https:' ? httpsRequest : httpRequest;
       const res = await new Promise((resolve, reject) => {
-        const req = activeRequest = transport({ protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method: hop === 0 ? method : 'GET', headers: { host: u.host, 'user-agent': `map-it-all/${VERSION}`, ...headers }, timeout: remaining(),
+        const req = activeRequest = transport({ protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method: hop === 0 ? method : 'GET', headers: { host: u.host, 'user-agent': `map-it-all/${VERSION}`, ...headers }, timeout: requestTimeoutMs ?? remaining(),
           // The socket connects to this resolved address while TLS verifies the original hostname.
           lookup: (_hostname, options, callback) => options?.all ? callback(null, [chosen]) : callback(null, chosen.address, chosen.family),
         }, (response) => {
