@@ -1,12 +1,61 @@
 // A small project that exercises every registration style the map claims to understand.
 
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 export function write(root, rel, text) {
   mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
   writeFileSync(path.join(root, rel), text);
+}
+
+// ---------- real Git repositories (review and context tests) ----------
+
+let emptyGlobalConfig;
+const gitEnv = () => {
+  // Synthetic identity and no user or system config, so a test never depends on the machine it runs on.
+  emptyGlobalConfig ??= path.join(mkdtempSync(path.join(tmpdir(), 'map-it-all-gitcfg-')), 'empty.gitconfig');
+  writeFileSync(emptyGlobalConfig, '');
+  return { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyGlobalConfig };
+};
+
+/** Runs git with argv only (no shell). Throws with stderr on failure. */
+export function gitRun(root, args) {
+  const r = spawnSync('git', ['-c', 'core.quotepath=off', ...args], { cwd: root, encoding: 'utf8', windowsHide: true, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+  return r.stdout;
+}
+
+/** Writes files (string or Buffer values), removes paths, commits, and optionally creates a branch first. */
+export function commitChange(root, { message = 'change', files = {}, remove = [], branch } = {}) {
+  if (branch) gitRun(root, ['switch', '-q', '-c', branch]);
+  for (const [rel, text] of Object.entries(files)) write(root, rel, text);
+  for (const rel of remove) gitRun(root, ['rm', '-q', '--', rel]);
+  gitRun(root, ['add', '-A']);
+  gitRun(root, ['commit', '-q', '--allow-empty', '-m', message]);
+  return gitRun(root, ['rev-parse', 'HEAD']).trim();
+}
+
+/**
+ * A repository on `main` with synthetic identity. `files` form the base commit; each `commits` entry is a
+ * later commit (see commitChange). `.map-it-all/` is ignored, as in a real project.
+ */
+export function gitFixture({ files = {}, commits = [] } = {}) {
+  const root = mkdtempSync(path.join(tmpdir(), 'map-it-all-git-'));
+  gitRun(root, ['init', '-q', '-b', 'main']);
+  gitRun(root, ['config', 'user.name', 'fixture']);
+  gitRun(root, ['config', 'user.email', 'fixture@example.invalid']);
+  gitRun(root, ['config', 'core.autocrlf', 'false']);
+  gitRun(root, ['config', 'commit.gpgsign', 'false']);
+  commitChange(root, { message: 'base', files: { '.gitignore': '.map-it-all/\n', ...files } });
+  for (const c of commits) commitChange(root, c);
+  return root;
+}
+
+/** Removes a fixture repository (Windows needs retries while git releases handles). */
+export function removeFixture(root) {
+  rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 });
 }
 
 export function fixture() {
