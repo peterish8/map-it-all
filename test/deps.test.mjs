@@ -461,29 +461,54 @@ test('HTTPS requests retain default TLS hostname verification, and redirects rev
   assert.doesNotMatch(source, /rejectUnauthorized:\s*false/);
 });
 
-test('fetchText keeps timeout and response size caps on pinned requests, including a total streaming deadline', async () => {
+test('fetchText keeps timeout and response size caps on pinned requests, including a total streaming deadline', async (t) => {
   const server = http.createServer((_req, res) => { res.write('123456'); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
     await assert.rejects(fetchText(url, { trusted: true, maxBytes: 3 }), /response exceeds 3 bytes/);
   } finally { server.closeAllConnections?.(); await new Promise((resolve) => server.close(resolve)); }
-  const slow = http.createServer(() => {});
+
+  let slowReq;
+  const slowReceived = new Promise((resolve) => { slowReq = resolve; });
+  const slow = http.createServer((_req) => { slowReq(); });
   await new Promise((resolve) => slow.listen(0, '127.0.0.1', resolve));
-  try { await assert.rejects(fetchText(`http://127.0.0.1:${slow.address().port}`, { trusted: true, timeoutMs: 20 }), /timed out/); }
-  finally { slow.closeAllConnections?.(); await new Promise((resolve) => slow.close(resolve)); }
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date', 'setInterval'] });
+  try {
+    const slowP = assert.rejects(fetchText(`http://127.0.0.1:${slow.address().port}`, { trusted: true, timeoutMs: 100 }), /timed out/);
+    await slowReceived;
+    t.mock.timers.tick(101);
+    await slowP;
+  } finally {
+    slow.closeAllConnections?.();
+    await new Promise((resolve) => slow.close(resolve));
+  }
 
   let ticks = 0;
   let streamTimer;
+  let clientConnected;
+  const connectedPromise = new Promise((resolve) => { clientConnected = resolve; });
   const streaming = http.createServer((_req, res) => {
+    clientConnected();
     streamTimer = setInterval(() => { ticks++; res.write('x'); }, 30);
   });
   await new Promise((resolve) => streaming.listen(0, '127.0.0.1', resolve));
   try {
-    await assert.rejects(fetchText(`http://127.0.0.1:${streaming.address().port}`, { trusted: true, timeoutMs: 180, maxBytes: 100 }), /timed out/);
+    const streamP = assert.rejects(fetchText(`http://127.0.0.1:${streaming.address().port}`, { trusted: true, timeoutMs: 180, maxBytes: 100 }), /timed out/);
+    await connectedPromise;
+    for (let i = 0; i < 6; i++) {
+      t.mock.timers.tick(30);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await streamP;
     assert.ok(ticks >= 3, 'bytes arrived repeatedly before the total deadline');
     assert.ok(ticks < 100, 'the test stream stayed under the response size cap');
-  } finally { clearInterval(streamTimer); streaming.closeAllConnections?.(); await new Promise((resolve) => streaming.close(resolve)); }
+  } finally {
+    clearInterval(streamTimer);
+    streaming.closeAllConnections?.();
+    await new Promise((resolve) => streaming.close(resolve));
+    t.mock.timers.reset();
+  }
 });
 
 test('advisories: nothing is fetched offline; online finds direct and transitive findings, their files, and caches them', async () => {
